@@ -1,0 +1,130 @@
+---
+title: "CE 218X Assignment 1"
+author: "Lena Bakalian"
+date: "9/26/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(rmarkdown)
+library(tidyverse)
+library(dplyr)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r}
+years <- 2017:2021
+quarters <- 1:4
+types <- c("Electric","Gas")
+
+pge_years <- NULL
+
+for (year in years) {
+  for (quarter in quarters) {
+    for (type in types) {
+      
+          filename <- paste0("PGE_",year,"_Q",quarter,"_",type,"UsageByZip.csv")
+
+          
+        print(filename)
+      if(!file.exists(filename)) next
+        
+      temp <- read_csv(filename)
+  
+        if (type == "Electric"){
+          temp <- temp %>%
+          mutate(TOTALKBTU = TOTALKWH * 3.142) %>% 
+          select(-TOTALKWH, -AVERAGEKWH)}
+            
+        if (type == "Gas"){
+          temp <- temp %>%
+          mutate(TOTALKBTU = TOTALTHM * 100) %>% 
+          select(-TOTALTHM, -AVERAGETHM)}
+            
+      pge_years <- rbind(pge_years,temp)
+    
+      saveRDS(pge_years, "pge_years.rds")
+
+    }
+  }
+}
+
+  
+```
+
+```{r}
+pge_filter <-
+  pge_years %>% 
+  filter(CUSTOMERCLASS %in% c("Elec- Commercial", "Elec- Residential","Gas- Commercial","Gas- Residential")) %>% 
+  group_by(CUSTOMERCLASS,MONTH,YEAR) %>%
+  summarize(TOTALKBTU = sum(TOTALKBTU, na.rm = TRUE)) %>% 
+  mutate(DATE=paste(YEAR,MONTH,"01",sep="-") %>% as.Date())
+```
+
+#make the chart for residential 
+```{r}
+pge_r_chart <- 
+  pge_filter %>% 
+  filter(CUSTOMERCLASS %in% c("Elec- Residential","Gas- Residential")) %>% 
+  ggplot() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  scale_x_date(date_breaks = "2 month", date_labels = "%b-%y") +
+  geom_bar(
+    aes(
+      x = DATE,
+      y = TOTALKBTU,
+      fill = CUSTOMERCLASS
+    ),
+    stat = "identity",
+    position = "stack"
+  ) +
+  labs(
+    x = "Month",
+    y = "kBTU",
+    title = "PG&E Territory Monthly Residential Electricity & Gas Usage, 2017-2021",
+  )
+ 
+
+#plot
+pge_r_chart 
+
+
+```
+
+#make plot for commerical
+```{r}
+pge_c_chart <- 
+  pge_filter %>% 
+  filter(CUSTOMERCLASS %in% c("Elec- Commercial","Gas- Commercial")) %>% 
+  ggplot() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  scale_x_date(date_breaks = "1 month", date_labels = "%b-%y") +
+  geom_bar(
+    aes(
+      x = DATE,
+      y = TOTALKBTU,
+      fill = CUSTOMERCLASS
+    ),
+    stat = "identity",
+    position = "stack"
+  ) +
+  labs(
+    x = "Month",
+    y = "kBTU",
+    title = "PG&E Territory Monthly Commercial Electricity & Gas Usage, 2017-2021",
+  )
+ 
+
+#plot
+pge_c_chart 
+```
+The commercial gas usage seemed to be slightly lower during the winter of the pandemic, where there had been cyclical peaks during the high-energy consumption months in order to heat establishments. This might have been due to the fact that fewer people were going to offices/commercial areas and therefore that reduced the need to heat them. This is most evident in December 2020 and January 2021, during the first winter of the pandemic. The electricity also was much lower during the first few months of the pandemic (starting around April 2020) which is directly related to the significant decrease in people going to commercial areas. As the pandemic went on, it is evident through the data that the commercial electricity increased back to pre-pandemic levels.
+
+The residential data plot illustrates less of a drastic change from pre-pandemic to pandemic energy usage. 
+
+This analysis of the data assumes that the population remained constant throughout the years and months and that there were no significant changes in number/size of commercial businesses over the time frame.
+
+
