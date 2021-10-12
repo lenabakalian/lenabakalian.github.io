@@ -1,0 +1,147 @@
+---
+title: "A3"
+author: "Lena Bakalian"
+date: "10/8/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+```{r}
+library(censusapi)
+library(tidyverse)
+library(tigris)
+library(sf)
+library(leaflet)
+
+Sys.setenv(CENSUS_KEY="c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
+```
+
+```{r}
+pums_2019_1yr <- getCensus(
+  name = "acs/acs1/pums",
+  vintage = 2019,
+  region = "public use microdata area:*", 
+  regionin = "state:06",
+  vars = c(
+    "SERIALNO",
+    "SPORDER",
+    "PWGTP",
+    "WGTP",
+    "NP",
+    "JWTRNS",
+    "HHL",
+    "HINCP",
+    "TEN"
+  )
+)
+```
+
+```{r}
+ca_pumas <-
+  pumas("CA", cb = T, progress_bar = F)
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+
+bay_counties <-
+  counties("CA", cb = T, progress_bar = F) %>%
+  filter(NAME %in% bay_county_names)
+
+bay_pumas <-
+  ca_pumas %>% 
+  st_centroid() %>% 
+  .[bay_counties, ] %>% 
+  st_drop_geometry() %>% 
+  left_join(ca_pumas %>% select(GEOID10)) %>% 
+  st_as_sf()
+
+bay_pums <-
+  pums_2019_1yr %>% 
+  mutate(
+    PUMA = str_pad(public_use_microdata_area,5,"left","0")
+  ) %>% 
+  filter(PUMA %in% bay_pumas$PUMACE10)
+```
+
+```{r}
+bay_pums_A3 <-
+  bay_pums %>% 
+  #filter(!duplicated(SERIALNO)) %>% 
+  mutate(
+    WGTP = as.numeric(WGTP),
+    JWTRNS = as.numeric(JWTRNS),
+    low_inc_outdoor_commuter = ifelse(
+      (JWTRNS = c(09,10)) &
+        (HINCP < 100000),
+      WGTP,
+      0
+    )
+  ) %>% 
+  group_by(PUMA) %>% 
+  summarize(
+   perc_low_inc_outdoor_commuter =
+      sum(low_inc_outdoor_commuter, na.rm =T)/sum(WGTP, na.rm = T)*100
+  ) %>% 
+  left_join(
+    bay_pumas %>% 
+      select(PUMACE10),
+    by = c("PUMA" = "PUMACE10")
+  ) %>%  
+ st_as_sf()
+```
+
+
+```{r}
+pums_pal <- colorNumeric(
+  palette = "Oranges",
+  domain = bay_pums_A3$perc_perc_low_inc_outdoor_commuter
+)
+
+leaflet() %>%
+  addTiles() %>% 
+  addPolygons(
+    data = bay_pums_A3,
+    fillColor = ~pums_pal(perc_low_inc_outdoor_commuter),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = ~paste0(
+      round(perc_low_inc_outdoor_commuter), 
+      "% Individuals who commute to work by bicycle or by walking and who are making less than $100K per year"
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    )
+  ) %>% 
+  addLegend(
+    data = bay_pums_A3,
+    pal = pums_pal,
+    values = ~perc_low_inc_outdoor_commuter,
+    title = "% Commuters who bike or walk<br>making less than $100K"
+  )
+```
+
+```{r}
+#compute and state the TOTAL number of people with the vulnerability characteristics you defined in the WHOLE Bay Area, using a sum() on your final dataframe
+```
+
+Here, I am mapping the population of the bay area with low-income levels (making under $100,000 per year) and who commute to work via a bicycle or by walking. I am mapping this based on individual-level data because the household level data might not reflect each individual within the household who are at risk of impacts from extreme heat. I chose this filter based on the interviews I conducted this week. Based on these surveys, it seemed that most people exprienced effects of heat-related illness when they were commuting to classes by walking or by biking. I figured that any person who is commuting outdoors and exerting physical energy would be more likely to experience these symptoms, and that this might be exacerbated if the person is living on a low-income salary because they might be more limited by their options for how to get to work.
+
+This map is useful in seeing where commuters might need extra levels of protection, perhaps through the form of increased shade or more accessible public transportation. While this map is useful to get a general idea, a more specific map might be more useful to inform real policy changes. This level of data is a bit high- level, so maybe using block-level data could be more specific. 
+
+
