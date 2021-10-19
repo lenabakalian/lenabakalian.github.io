@@ -1,0 +1,423 @@
+---
+title: "218X A4"
+author: "Lena Bakalian"
+date: "10/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+Aquity analysis of educational attainment by race for Santa Clara county, CA. Using 2019 ACS 5-yr summary data.
+```{r}
+library(tidyverse)
+library(censusapi)
+Sys.setenv(CENSUS_KEY="c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
+
+acs_vars_2019_5yr <-
+    listCensusMetadata(
+    name = "2019/acs/acs5",
+    type = "variables"
+  )
+```
+
+```{r}
+# #white households in the bay area
+# sc_education_race_white <- getCensus(
+#  name = "acs/acs5",
+#  vintage = "2019",
+#  region = "county:085",
+#  regionin = "state:06",
+#  vars = "group(C15002A)",
+# #sub pop: __
+# ) %>%
+#  select(ends_with("E") & -c(state,NAME,GEO_ID)) %>%
+#  pivot_longer(
+#    everything(),
+#    names_to = "name",
+#    values_to = "estimate"
+#  ) %>%
+#  left_join(
+#    acs_vars_2019_5yr %>%
+#      select(name, label)
+#  ) %>%
+#  separate(
+#    label,
+#    into = c(NA, NA, NA, "education"),
+#    sep = "!!"
+#  ) %>%
+#  select(-name) %>%
+#  filter(!is.na(education)) %>%  #is it na or not, will get rid of things that are not na
+#  group_by(education) %>% 
+#  summarize(across(everything(),sum)) %>% 
+#  mutate(
+#    race = "white alone" #distinguishes from multi-race respondents
+#  )
+```
+
+
+```{r}
+race_categories <- c(
+  "White alone",  # go to datacensus.gov to see the headings
+  "Black or African American alone",
+  "American Indian and Alaska Native alone",
+  "Asian alone",
+  "Native Hawaiian and Other Pacific Islander alone",
+  "Some Other Race alone",
+  "Two or more Races"
+)
+```
+
+```{r}
+sc_education_race <- 
+  1:7 %>% 
+  map_dfr(function(x){      #dfr= dataframe (automatic rbind)
+    getCensus(
+      name = "acs/acs5",
+      vintage = 2019,
+      region = "county:085",
+      regionin = "state:06",
+      vars = paste0("group(C15002",LETTERS[x],")"),
+    ) %>% 
+      select(ends_with("E") & -c(state,NAME,GEO_ID)) %>% 
+      pivot_longer(
+        everything(),
+        names_to = "name",
+        values_to = "estimate"
+      ) %>% 
+      left_join(
+        acs_vars_2019_5yr %>% 
+          select(name, label)
+      ) %>% 
+      separate(
+        label,
+        into = c(NA, NA, NA, "education"),
+        sep = "!!"
+      ) %>% 
+      select(-name) %>% 
+      group_by(education) %>% 
+      summarize(across(everything(),sum)) %>% 
+      filter(!is.na(education)) %>%  #is it na or not, will get rid of things that are not na 
+      mutate(
+        race = race_categories[x] #distinguishes from multi-race respondents
+      )
+})
+```
+
+Plot the “stacked” bar chart
+```{r}
+sc_education_race %>% 
+  group_by(education, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = education %>% factor(levels = rev(c("Total", "Less than high school diploma", "High school graduate (includes equivalency)", "Some college or associate's degree", "Bachelor's degree or higher"))),
+      y = estimate,
+      fill = race 
+    ),
+    stat = "identity",
+    position = "stack"
+  ) +
+  labs(
+    x = "Level of Educational Attainment",
+    y = "Proportion of individuals",
+    title = "Santa Clara county educational attainment by race (population 25 years or older)",
+    fill = "Race of individual"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  ) +
+  guides(
+    fill = guide_legend(
+      reverse = T
+    )
+  )
+```
+
+Plot the “filled” bar charts
+```{r}
+sc_race_total <-
+  sc_education_race %>% 
+  group_by(education, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  rbind(sc_education_race %>% 
+          group_by(race) %>% 
+          summarize(estimate = sum(estimate)) %>% 
+          mutate(education = "Total")) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = education %>% factor(levels = rev(c("Total", "Less than high school diploma", "High school graduate (includes equivalency)", "Some college or associate's degree", "Bachelor's degree or higher"))),
+      y = estimate,
+      fill = race %>% factor(levels = rev(unique(sc_education_race$race)))
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "Level of educational attainment",
+    y = "Proportion of individuals",
+    title = "Santa Clara county educational attainment by race (population 25 years or older)",
+    fill = "Race of householder"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  )  +
+  guides(
+    fill = guide_legend(
+      reverse = T
+    )
+  )
+
+sc_education_race_total
+```
+Looking at the data presented for Santa Clara county in CA, it seems that the "white alone" population has the highest percentage of people who have "some college or associate's degree" but the "asian alone" population has a higher proportion of individuals who have a "bachelor's degree or higher." This data used is for populations 25 years or older, so this data could potentially be misrepresenting true statistics of educational attainment, if for example, many individuals under the age of 25 years have received their bachelor's degree in recent years. It would be interesting to see data from earlier ages as well to have a more comprehensive understanding of the true comparison between race and educational attainment. The filled plot shows the data in a clearer way than the stacked plot, allowing for comparison among total population and breakdown of different races. 
+
+
+Educational attainment by ethnicity
+
+```{r}
+acs_vars_2019_1yr <-
+    listCensusMetadata(
+    name = "2019/acs/acs1",
+    type = "variables"
+  )
+```
+
+```{r}
+race_categories_latinx <- c(
+  "Latinx",
+  "White, not Latinx",
+  "Not White, not Latinx"
+)
+```
+
+```{r}
+#white not latinx educational attainment
+sc_education_white_not_latin <- getCensus(
+ name = "acs/acs1",
+ vintage = 2019,
+ region = "county:085",
+ regionin = "state:06",
+ vars = "group(C15002H)",
+) %>%
+ select(ends_with("E") & -c(state,NAME,GEO_ID)) %>%
+ pivot_longer(
+   everything(),
+   names_to = "name",
+   values_to = "estimate"
+ ) %>%
+ left_join(
+   acs_vars_2019_1yr %>%
+     select(name, label)
+ ) %>%
+ separate(
+   label,
+   into = c(NA, NA, NA, "education"),
+   sep = "!!"
+ ) %>%
+ select(-name) %>%
+ filter(!is.na(education)) %>%  #is it na or not, will get rid of things that are not na
+ group_by(education) %>%
+ summarize(across(everything(),sum)) %>%
+ mutate(
+   race = "white alone" #distinguishes from multi-race respondents
+ )
+```
+
+```{r}
+#latinx educational attainment
+sc_education_latinx <- getCensus(
+ name = "acs/acs1",
+ vintage = 2019,
+ region = "county:085",
+ regionin = "state:06",
+ vars = "group(C15002I)",
+) %>%
+ select(ends_with("E") & -c(state,NAME,GEO_ID)) %>%
+ pivot_longer(
+   everything(),
+   names_to = "name",
+   values_to = "estimate"
+ ) %>%
+ left_join(
+   acs_vars_2019_1yr %>%
+     select(name, label)
+ ) %>%
+ separate(
+   label,
+   into = c(NA, NA, NA, "education"),
+   sep = "!!"
+ ) %>%
+ select(-name) %>%
+ filter(!is.na(education)) %>%  #is it na or not, will get rid of things that are not na
+ group_by(education) %>%
+ summarize(across(everything(),sum)) %>%
+ mutate(
+   race = "latinx" #distinguishes from multi-race respondents
+ )
+```
+
+```{r}
+#totals of educational attainment
+sc_education_total_1yr <- getCensus(
+  name = "acs/acs1",
+  vintage = 2019,
+  region = "county:085",
+  regionin = "state:06",
+  vars = "group(C15002)",
+) %>%
+  select(ends_with("E") & -c(state,NAME,GEO_ID)) %>%
+  pivot_longer(
+  everything(),
+  names_to = "name",
+  values_to = "estimate"
+ ) %>%
+ left_join(
+   acs_vars_2019_1yr %>%
+     select(name, label)
+ ) %>%
+   separate(
+   label,
+   into = c(NA, NA, NA, "education"),
+   sep = "!!"
+ ) %>%
+ # select(-name) %>%
+ filter(!is.na(education)) %>%
+  mutate(
+    ethnicity = "Total",
+    education = case_when(
+      education %in% c("Less than 9th grade", "9th to 12th grade, no diploma") ~ "Less than high school diploma",
+      education == "High school graduate (includes equivalency)" ~ education,
+      education %in% c("Some college, no degree", "Associate's degree") ~ "Some college or associate's degree",
+      education %in% c("Bachelor's degree", "Graduate or professional degree") ~ "Bachelor's degree or higher"
+    )) %>% 
+  group_by(education, ethnicity) %>% 
+  summarize(estimate = sum(estimate))
+
+```
+
+
+#  group_by(education) %>% 
+#  summarize(across(everything(),sum)) %>% 
+#  mutate(
+#    race = "white alone" #distinguishes from multi-race respondents
+#  )
+
+#educational attainment for not white not latinx
+
+```{r}    
+sc_educational_total <- 
+  sc_education_total_1yr %>%
+  group_by(education) %>%
+  summarize(estimate = sum(estimate)) %>%
+    mutate(
+      race = "total"
+   )
+  
+sc_education_not_white_not_latinx <-
+  sc_educational_total %>% 
+  mutate(
+    neither = (estimate - sc_education_white_not_latin$estimate - sc_education_latinx$estimate),
+    race = "Not white, not latinx"
+  )%>%
+  select(-estimate)%>%
+  rename(estimate = neither)
+  
+```
+
+stacked plot 
+```{r}
+sc_stacked_latinx <-
+  sc_education_not_white_not_latinx %>% 
+    group_by(education, race) %>% 
+    summarize(estimate = sum(estimate)) %>% 
+    rbind(sc_education_latinx) %>% 
+    rbind(sc_education_white_not_latin) %>%
+    #rbind(sc_education_total) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = education %>% factor(levels = rev(c("Total", "Less than high school diploma", "High school graduate (includes equivalency)", "Some college or associate's degree", "Bachelor's degree or higher"))),
+      y = estimate,
+      fill = race 
+    ),
+    stat = "identity",
+    position = "stack"
+  ) +
+  labs(
+    x = "Level of Educational Attainment",
+    y = "Number of individuals",
+    title = "Santa Clara county educational attainment by ethnicity (population 25 years or older)",
+    fill = "Race of individual"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  ) +
+  guides(
+    fill = guide_legend(
+      reverse = T
+    )
+  )
+sc_stacked_latinx
+
+```
+
+```{r}
+plot_latinx <- 
+  sc_education_not_white_not_latinx %>% 
+    group_by(education, race) %>% 
+    summarize(estimate = sum(estimate)) %>% 
+    rbind(sc_education_latinx) %>% 
+    rbind(sc_education_white_not_latin)
+
+sc_ethnicity_total <-
+  plot_latinx %>% 
+  group_by(race) %>%
+  summarize(estimate = sum(estimate)) %>% 
+  mutate(education = "Total")
+
+plot_filled_latinx <-
+  plot_latinx %>% 
+    rbind(sc_ethnicity_total) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = education %>% factor(levels = rev(c("Total", "Less than high school diploma", "High school graduate (includes equivalency)", "Some college or associate's degree", "Bachelor's degree or higher"))),
+      y = estimate,
+      fill = race #%>% #factor(levels = rev(unique(sc_education_race$race)))
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "Level of educational attainment",
+    y = "Proportion of individuals",
+    title = "Santa Clara county educational attainment by ethnicity (population 25 years or older)",
+    fill = "Race of householder"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  )  +
+  guides(
+    fill = guide_legend(
+      reverse = T
+    )
+  )
+
+plot_filled_latinx
+```
+
+Looking at the data for Latinx, White not Latinx, and non-white non-Latinx, the Latinx community is overly represented in the "less than highschool diploma" and ""high school graduate" categories of educational attainment but very underrepresented in the "bachelor's degree or higher category. Conversely, the "white alone" population has a significantly lower proportion of "less than high school diploma" compared to its total population. This data illustrates that for people over the age of 25, the Latinx population is achieving fewer levels of educational attainment than its white and not-white, not-Latinx counterparts. This could be due to potential lack of opportunity or barriers for Latinx populations that are not the case for white alone populations. 
+
+
