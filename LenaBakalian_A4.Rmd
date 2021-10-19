@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
 ```
 
-Aquity analysis of educational attainment by race for Santa Clara county, CA. Using 2019 ACS 5-yr summary data.
+Equity analysis of educational attainment by race for Santa Clara county, CA. Using 2019 ACS 5-yr summary data.
 ```{r}
 library(tidyverse)
 library(censusapi)
@@ -105,8 +105,9 @@ sc_education_race <-
 })
 ```
 
-Plot the “stacked” bar chart
+
 ```{r}
+#Plot the “stacked” bar chart
 sc_education_race %>% 
   group_by(education, race) %>% 
   summarize(estimate = sum(estimate)) %>% 
@@ -138,8 +139,9 @@ sc_education_race %>%
   )
 ```
 
-Plot the “filled” bar charts
+
 ```{r}
+#Plot the “filled” bar charts
 sc_race_total <-
   sc_education_race %>% 
   group_by(education, race) %>% 
@@ -175,12 +177,12 @@ sc_race_total <-
     )
   )
 
-sc_education_race_total
+sc_race_total
 ```
 Looking at the data presented for Santa Clara county in CA, it seems that the "white alone" population has the highest percentage of people who have "some college or associate's degree" but the "asian alone" population has a higher proportion of individuals who have a "bachelor's degree or higher." This data used is for populations 25 years or older, so this data could potentially be misrepresenting true statistics of educational attainment, if for example, many individuals under the age of 25 years have received their bachelor's degree in recent years. It would be interesting to see data from earlier ages as well to have a more comprehensive understanding of the true comparison between race and educational attainment. The filled plot shows the data in a clearer way than the stacked plot, allowing for comparison among total population and breakdown of different races. 
 
 
-Educational attainment by ethnicity
+Educational attainment by ethnicity using 2019 ACS 1-yr data.
 
 ```{r}
 acs_vars_2019_1yr <-
@@ -303,15 +305,6 @@ sc_education_total_1yr <- getCensus(
 
 ```
 
-
-#  group_by(education) %>% 
-#  summarize(across(everything(),sum)) %>% 
-#  mutate(
-#    race = "white alone" #distinguishes from multi-race respondents
-#  )
-
-#educational attainment for not white not latinx
-
 ```{r}    
 sc_educational_total <- 
   sc_education_total_1yr %>%
@@ -332,8 +325,9 @@ sc_education_not_white_not_latinx <-
   
 ```
 
-stacked plot 
+
 ```{r}
+#stacked plot 
 sc_stacked_latinx <-
   sc_education_not_white_not_latinx %>% 
     group_by(education, race) %>% 
