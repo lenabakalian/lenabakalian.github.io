@@ -1,0 +1,192 @@
+---
+title: "CEE 218X Assignment 5"
+author: "Lena Bakalian"
+date: "10/21/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+```{r, include = FALSE}
+#Retrieve CES 4.0 data for census tracts in the Bay Area. Produce two maps, using either `mapview()` or `leaflet()`: one of PM2.5, and one of Asthma, as defined by CES. 
+
+
+library(tidyverse)
+library(censusapi)
+library(sf)
+library(mapview)
+library(tigris) #census tracts
+library(mapview)
+library(readxl)
+
+ces4 <- read_excel("calenviroscreen40resultsdatadictionary_F_2021.xlsx")
+
+colnames(ces4)
+
+ces4_clean <- ces4 %>% 
+  select(!ends_with("Pctl"))
+
+sum(is.na(ces4_clean$Poverty)) #will produce amount of valuable content in dataset
+
+#ces4_clean %>% #same as line 28
+  # .$Poverty #now just the column of values of poverty
+  #pull(Poverty) %>% #pull pulls a single vertical column of data. now can pipe that to is.na() - inverting order of line 28
+  #is.na() %>% 
+  #sum()
+
+#bringing in spatial data
+ca_tracts <- tracts("CA")
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+
+bay_counties <-
+  counties("CA", cb = T, progress_bar = F) %>%
+  filter(NAME %in% bay_county_names)
+
+bay_tracts <-
+  ca_tracts %>% 
+  .[bay_counties, ]
+
+
+ces4_map <- ces4_clean %>% 
+  filter(`California County` %in% bay_county_names) %>% 
+    left_join(
+      ca_tracts %>% 
+        transmute(`Census Tract` = as.numeric(GEOID)
+        )
+    ) %>% 
+  st_as_sf()
+
+# ces4_map <- ces4_clean %>% 
+#   left_join(
+#     bay_tracts %>% 
+#       select(GEOID) %>% #transmute is the combination of mutate & select
+#       mutate(GEOID = GEOID %>% as.numeric()),
+#     by = c("Census Tract" = "GEOID")
+#   ) %>% 
+#   st_as_sf() #review this sf=simple features
+
+```
+
+```{r}
+mapview(ces4_map, zcol = "Asthma")
+mapview(ces4_map, zcol = "PM2.5")
+```
+
+The indicator for PM2.5 is the annual mean concentration of PM2.5 (weighted average of
+measured monitor concentrations and satellite observations, in µg/m3 and measured from 2015 to 2017. The indicator for Asthma is spatially modeled, age-adjusted rate of ED visits for asthma per 10,000. This data is also from 2015 to 2017.
+
+The maps show concentrations of high PM2.2 in areas centering around Oakland, and decreases as the radius increases. For example, areas north of Santa Rosa have some of the lowest PM2.5 values, while Oakland has the highest.
+
+The maps show concentrations of high Asthma prevalence in areas such as Oakland, Vallejo, and just north-west of San Leandro. The concentrations of Asthma prevalence decrease as the radius increases from these points. 
+
+```{r}
+#Create a scatter plot with PM2.5 on the x-axis and Asthma on the y-axis, with a best-fit line
+ggplot( 
+  data = ces4_map,
+  aes(
+      x = PM2.5,
+      y = Asthma
+    )
+  ) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+The best-fit line is not very fit at this stage. While it does center around the average, where many of the data points are, there are many data points that deviate significantly from this line.
+
+```{r}
+#Perform a linear regression analysis using `lm()` and report the results.
+model <- ces4_map %>% 
+  filter(
+    !is.na(PM2.5),
+    !is.na(Asthma)
+  ) %>% lm(formula = Asthma ~ PM2.5)
+summary(model)
+```
+
+An increase of PM2.5 in x is associated with an increase of Asthma in y;
+9.6% of the variation in y is explained by the variation in x. 
+
+```{r}
+#Perform `plot(density(residuals(model)))` at this stage, where `model` is the name of the object that holds the results of your regression analysis.
+
+plot(density(residuals(model)))
+
+```
+
+The mean of the residual is close to zero but the residual distribution is skewed to the right (positive skew). Therefore, I will apply a log transformation to the model.
+
+```{r}
+#repeating steps 2-3 with a log transform on the model
+#replace y ~ x in your lm() argument with log(y) ~ x
+
+#scatter plot
+ggplot( 
+  data = ces4_map,
+  aes(
+      x = PM2.5,
+      y = log(Asthma)
+    )
+  ) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+This fitness of this line to the data is much better than the previous plot. The best-fit line is centered well among the data points, reflecting a truer average.
+
+```{r}
+log_model <- lm(log(Asthma) ~ PM2.5, ces4_map)
+summary(log_model)
+```
+
+An increase of PM2.5 in x is associated with an increase of Asthma in log(y);
+After applying the log transform, 99.7% of the variation in y is explained by the variation in x. 
+
+```{r}
+plot(density(residuals(log_model)))
+```
+
+```{r}
+#Then create a third map, this time of the residuals themselves. You’ll need to combine `residuals(model)` with spatial information; note that the order of `residuals(model)` should exactly match the order of records you supplied to `lm()`. 
+
+ces4_map_residuals <-ces4_map %>% 
+  filter(
+    !is.na(PM2.5),
+    !is.na(Asthma)
+  ) %>% 
+  mutate(
+    residuals = residuals(log_model)
+  )
+
+mapview(ces4_map_residuals, zcol = "residuals")
+```
+
+The map showing log residuals shows an over correlation of PM2.5 and asthma in areas around Vallejo and Antioch, as well as in between Alameda and San Leandro. Conversely, this map shows an undercorrelation between PM2.5 and asthma in areas around Stanford (the most negative residual), with lesser degrees in Cupertino and Menlo Park. Some areas just outside Berkeley are also undercorrelated. Stanford's lowest residual might be due to the fact that students are often not here for a long period of time, thus might not have the time to develop asthma from PM2.5 in the short time they are living on campus. 
+
+
+```{r}
+head_20 <- 
+ces4_map_residuals %>% 
+  arrange(residuals) %>% 
+  head(20)
+
+mapview(head_20, zcol = "residuals")
+```
+
+Now plotting just the 20% over and undercorrelated, we can see these areas even more clearly.
