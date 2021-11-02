@@ -1,0 +1,203 @@
+---
+title: "218X Assignment 6"
+author: "Lena Bakalian"
+date: "10/26/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+
+```{r}
+library(censusapi)
+library(tidyverse)
+library(tigris)
+library(sf)
+library(leaflet)
+
+Sys.setenv(CENSUS_KEY="c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
+
+pums_2019_1yr <- getCensus(
+  name = "acs/acs1/pums",
+  vintage = 2019,
+  region = "public use microdata area:*",
+  regionin = "state:06",
+  vars = c(
+    "SERIALNO",
+    "SPORDER",
+    "PWGTP",
+    "WGTP",
+    "YBL",
+    "BLD",
+    "MV",
+    "HINCP",
+    "TEN",
+    "AGEP"
+  )
+)
+
+saveRDS(pums_2019_1yr, "a6_pums.rds")
+pums_2019_1yr <- readRDS("a6_pums.rds")
+```
+
+```{r}
+#First, filter to San Francisco PUMAs.
+ca_pumas <-
+  pumas("CA", cb = T, progress_bar = F)
+
+sf_county <-
+  counties("CA", cb = T, progress_bar = F) %>% 
+  filter(NAME == "San Francisco") 
+
+sf_pumas <-
+  ca_pumas %>% 
+  st_centroid() %>% 
+  .[sf_county, ] %>% 
+  st_drop_geometry() %>% 
+  left_join(ca_pumas %>% select(GEOID10)) %>% 
+  st_as_sf()
+
+
+sf_pums <-
+  pums_2019_1yr %>% 
+  mutate(
+    PUMA = str_pad(public_use_microdata_area,5,"left","0")
+  ) %>% 
+  filter(PUMA %in% sf_pumas$PUMACE10)
+```
+
+
+```{r}
+#Filter to housing structures built before 1960. This is a simplification of the more complicated breakdown shown in Table 2 of the Appendix of the Lead Risk Chapter in the CES report.
+
+sf_pums_clean <- sf_pums %>% 
+  mutate(
+    YBL = as.numeric(YBL),
+    AGEP = as.numeric(AGEP),
+  ) %>% 
+  filter(as.numeric(YBL) %in% 1:3) %>% 
+#OR: filter(YBL %in% as.character(1:3))
+  arrange(AGEP) %>% 
+  group_by(SERIALNO) %>% 
+  summarize_all(first)
+
+
+#Use mutate() to create a variable called leadrisk, which can be set to 1 when two conditions are both true (use & to link two conditional statements about HINCP and AGEP).
+
+sf_pums_regression <-
+  sf_pums_clean %>%  
+  mutate(
+    leadrisk = ifelse(
+    as.numeric(HINCP) <= 90000 & AGEP <= 6,
+    1,
+    0
+  )
+)
+```
+
+
+```{r}
+#Create a logit model in which leadrisk is the predicted variable, and BLD, TEN, MV, and PUMA are the predictors. 
+
+sf_pums_factor <- sf_pums_regression %>% 
+  mutate(
+    unit = BLD %>% 
+      factor(
+        levels = sf_pums$BLD %>% 
+          unique() %>% 
+          as.numeric() %>% 
+          sort()
+       ),
+      tenure = TEN %>% 
+        factor(
+        levels = sf_pums$TEN %>% 
+          unique() %>% 
+          as.numeric() %>% 
+          sort()
+      ),
+      time = MV %>% 
+        factor(
+        levels = sf_pums$MV %>% 
+          unique() %>% 
+          as.numeric() %>% 
+          sort()
+      ),
+      puma = PUMA %>% 
+        factor(
+        levels = sf_pums$PUMA %>% 
+          unique() %>% 
+          sort()
+      ))
+```
+
+
+```{r}
+#Show a summary of the model
+logit_model <- glm(
+  leadrisk ~ unit + tenure + time + puma,
+  family = quasibinomial(),
+  data = sf_pums_factor
+)
+
+summary(logit_model)
+
+```
+
+
+```{r}
+#detail one example of a predicted likelihood score (pick a random record, state the predictor variables, and state the predicted score).
+
+#grab one random row from your full dataset, using sample_n() (look this function up to see the simple way to use it). Then just supply this one-row dataframe inside of predict().
+
+sample_predict <- sample_n(sf_pums_factor, 1)
+
+predict(logit_model, sample_predict, type = "response")
+```
+
+```{r}
+#Calculate the predicted score (between 0 and 1) for your entire dataset. 
+
+sf_pums_predicted <- sf_pums_factor %>% 
+  mutate(predict = predict(logit_model, sf_pums_factor, type = "response"))
+
+#Present true positives, true negatives, and Type 1/2 errors of your model’s performance on identifying actual “lead risk” (income < $90K, at least one child) in these households, where your threshold score is 0.10 or more (10%). 
+
+summary_2x2 <-
+  sf_pums_predicted %>% 
+  mutate(
+    leadrisk = ifelse(
+      leadrisk == 1, 
+      "Yes (At risk)", 
+      "No (Not at risk)"
+    ),
+    predicted_yes = ifelse(
+      predict >= 0.1, 
+      as.numeric(WGTP),
+      0
+    ),
+      predicted_no = ifelse(
+      predict <= 0.1, 
+      as.numeric(WGTP),
+      0
+      
+  )) %>% 
+group_by(leadrisk) %>% 
+summarize(
+  `Predicted_Yes` = sum(predicted_yes), 
+  `Predicted_No` = sum(predicted_no)
+)
+
+summary_2x2
+```
+Analysis:
+
+The households which exceeded the threshold score (leadrisk > 1), BLD values were generally referencing apartments or attached single family homes. For tenure (TEN values), many of the values were tied to residences either owned with a mortgage or loan or rented. For MV values, many reflected that the residents moved into the house or apartment in the range of 5 to 9 years ago. 
+
+Adding the true and false positives, you'd get 5,368 at risk. Therefore you'd have this many households to mail postcards to. 
+
+I'd expect 16.2% of postcards to actually go to low-income households with children (true positive/all positive). These are the true positive households that we have accounted for in our model. Therefore, only 16.2% of all at-risk children are likely to be reached. 86% of children reached (false negative/total predicted yes) are not at risk.
+
+Ways to improve strategy might be to target schools/preschools and deliver postcards there. You might deliver them to students who are not at risk, but you will likely reach a higher percentage of children who are at risk. Another way could be to have them at doctors offices for parents to take. 
+ 
