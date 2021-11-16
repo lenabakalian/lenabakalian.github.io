@@ -1,0 +1,272 @@
+---
+title: "CE218X Assignment 8"
+author: "Lena Bakalian"
+date: "11/14/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+```{r}
+library(tigris)
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(censusapi)
+library(leaflet)
+library(StatMatch)
+
+Sys.setenv(CENSUS_KEY="c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
+
+ca_pumas <-
+  pumas("CA", cb = T, progress_bar = F)
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+
+bay_counties <-
+  counties("CA", cb = T, progress_bar = F) %>%
+  filter(NAME %in% bay_county_names)
+
+bay_pumas <-
+  ca_pumas %>% 
+  st_centroid() %>% 
+  .[bay_counties, ] %>% 
+  st_drop_geometry() %>% 
+  left_join(ca_pumas %>% select(GEOID10)) %>% 
+  st_as_sf()
+
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = bay_pumas,
+    weight = 1,
+    color = "gray",
+    label = ~PUMACE10
+  ) %>% 
+  addMarkers(
+    lng = -121.780242713,
+    lat = 37.995818091
+  ) %>% 
+  addPolygons(
+    data = bay_pumas %>% 
+      filter(PUMACE10 == "01309")
+  )
+```
+
+
+```{r}
+pums_2014_2019 <- readRDS("pums_2014_2019_wts.rds")
+  
+pums_bart <- pums_2014_2019 %>%
+  mutate(
+    PWGTP = as.numeric(PWGTP),
+    bart = ifelse(
+      JWTR %in% c("4"), #transportation to work, #4 is train/subway train
+      #if value of JWTR is 4, we give the value of all the weights
+      PWGTP,
+      0
+    )
+  ) %>% 
+  group_by(PUMA, year) %>% 
+  summarize(
+    pop = sum(PWGTP), #gives us full count of people on the PUMA
+    bart = sum(bart) #gives us the subset based on ifelse statement
+  )
+```
+
+```{r}
+pums_pal <- colorNumeric(
+  palette = "YlOrRd",
+  domain = pums_bart %>% 
+    filter(year == 2017) %>% 
+    pull(pop)
+)
+
+leaflet() %>% #rawcount population map
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = pums_bart %>% 
+      filter(year == 2017) %>% 
+      right_join(bay_pumas %>% select(PUMA = PUMACE10)) %>% #adding geometry data
+      #if wanted to make it proportional to area: use mutate to create an area field through st_area()
+      st_as_sf(),
+    fillColor = ~pums_pal(pop),
+    color = "white",
+    weight = 1,
+    fillOpacity = 0.5,
+    label = ~paste0(PUMA,": Population ", pop)
+  )
+```
+
+```{r}
+pums_pal <- colorNumeric(
+  palette = "GnBu",
+  domain = pums_bart %>% 
+    filter(year == 2017) %>% 
+    pull(bart)
+)
+
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = pums_bart %>% 
+      filter(year == 2017) %>% 
+      right_join(bay_pumas %>% select(PUMA = PUMACE10)) %>% 
+      st_as_sf(),
+    fillColor = ~pums_pal(bart),
+    color = "white",
+    weight = 1,
+    fillOpacity = 0.5,
+    label = ~paste0(PUMA,": ", bart, " BART commute riders")
+  )
+```
+
+```{r}
+pums_bart_clean <- #makes data more horizontal
+  pums_bart %>% 
+  select(-pop) %>% #removing population data
+  pivot_wider( #use this if you are doing some math or to reduce the number of rows
+    names_from = year,
+    values_from = bart
+  )
+```
+
+```{r}
+obs_matrix <-
+  pums_bart_clean %>% 
+  ungroup() %>% 
+  select(`2014`,`2015`,`2016`,`2017`) %>% 
+  as.matrix()
+
+dist_matrix <- mahalanobis.dist(obs_matrix)
+
+rownames(dist_matrix) <- pums_bart_clean$PUMA
+colnames(dist_matrix) <- pums_bart_clean$PUMA
+
+match <- dist_matrix["01309",] %>% 
+  as.data.frame() %>% 
+  rownames_to_column() %>% 
+  rename(
+    PUMA = rowname,
+    match = "."
+  ) %>% 
+  right_join(
+    pums_bart_clean
+  ) %>% 
+  arrange(match) %>% 
+  .[1:11, ] %>% 
+  left_join(bay_pumas %>% select(PUMA = PUMACE10)) %>% 
+  st_as_sf()
+```
+
+```{r}
+leaflet() %>% 
+  addTiles() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = match[1, ],
+    color = "red",
+    label = ~PUMA
+  ) %>% 
+  addPolygons(
+    data = match[-1, ],
+    label = ~PUMA
+  )
+```
+
+```{r}
+match_pumas <-
+  match %>% 
+  filter(!PUMA %in% c("01309")) %>% 
+  st_drop_geometry() %>% 
+  select(-match) %>% 
+  pivot_longer(
+    -PUMA,
+    names_to = "year",
+    values_to = "bart"
+  ) %>%
+  group_by(
+    year
+  ) %>% 
+  summarize(
+    bart = mean(bart),
+    PUMA = "Similar PUMAs"
+  )
+
+treatment_pumas <-
+  match %>% 
+  filter(PUMA %in% c("01309")) %>% 
+  select(-match) %>% 
+  st_drop_geometry() %>% 
+  pivot_longer(
+    -PUMA,
+    names_to = "year",
+    values_to = "bart"
+  )
+
+rbind(
+  treatment_pumas,
+  match_pumas
+) %>% 
+  ggplot(
+    aes(
+      x = as.numeric(year),
+      y = bart,
+      color = PUMA
+    )
+  ) +
+  geom_line() +
+  geom_vline(xintercept = 2018, linetype = "dashed") +
+  labs(
+    title = "Antioch vs. control neighborhoods, BART ridership",
+    x = "Year",
+    y = "BART commute riders"
+  )
+```
+
+
+```{r}
+transit_did <-
+  match %>% 
+  st_drop_geometry() %>% 
+  select(-match) %>% 
+  pivot_longer(
+    -PUMA,
+    names_to = "year",
+    values_to = "bart"
+  ) %>% 
+  mutate(
+    year = year %>% as.numeric(),
+    time = ifelse(year >= 2018, 1, 0),
+    treated = ifelse(PUMA == "01309", 1, 0)
+  )
+
+did_reg <- lm(bart ~ treated*time, data = transit_did) #creates interaction effect between treated and time
+
+summary(did_reg)
+```
+
+Commentary: 
+
+The Antioch Bart station, which opened in mid-2018, is the reason for increased ridership from 2017 to 2018. The slope on the graph above from 2017 to 2018 shows exactly this. The effect size of this treatment is the gap between the red and the green lines. 
+
+1097.22 is the "difference-in-difference," meaning the Antioch BART station in mid-2018, as having had an estimated impact of about 1100 new BART commuters. This number is significant because the p-value of 0.000211% is less than 5%. This differs from the textbook example, where the difference-in-difference value was only about 250 new commuters. This number had a p-value of about 45%, which was not significant. The difference-in-difference value (treated:time) only focuses on the difference beyond the baseline differences (treated and time).
+
+The “baseline” effects, "treated," represents the pre-treatment difference between treatment and control PUMAs as 470.68 (in the previous line graph as the average vertical difference between the two lines before 2018). This compares with the textbook example value of 0.9667, which is much lower.
+
+The "time" value of 207.28 represents the change in the control PUMAs from pre-treatment to post-treatment. This compares with the textbook example value of 199.6, which is slightly lower.
+
+Since the Antioch Bart station opened in mid-2018, we technically do not have the full picture of how this station affected ridership since we are using 1-yr data. While we can assume that this station opening was the cause of increased ridership from the beginning of 2018 to the beginning of 2019, we should keep in mind that this could technically also be due to other factors. We are also extrapolating that Bart ridership has increased for work purposes, when we don't truly have that information. Bart ridership could have increased due to other reasons for travel.
