@@ -8,14 +8,17 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+```{r}
 library(knitr)
 library(rmarkdown)
 library(tidyverse)
 library(dplyr)
-knitr::opts_chunk$set(echo = FALSE)
 ```
 
-```{r}
+```{r, message = FALSE}
 years <- 2017:2021
 quarters <- 1:4
 types <- c("Electric","Gas")
@@ -33,14 +36,20 @@ for (year in years) {
       if(!file.exists(filename)) next
         
       temp <- read_csv(filename)
+        
+        if ((year == 2017) & (quarter == 4)){
+          temp <- temp %>% 
+          filter(MONTH != 9)
+        }
+          
   
         if (type == "Electric"){
-          temp <- temp %>%
+          temp <- temp %>% 
           mutate(TOTALKBTU = TOTALKWH * 3.142) %>% 
           select(-TOTALKWH, -AVERAGEKWH)}
             
         if (type == "Gas"){
-          temp <- temp %>%
+          temp <- temp %>% 
           mutate(TOTALKBTU = TOTALTHM * 100) %>% 
           select(-TOTALTHM, -AVERAGETHM)}
             
@@ -56,15 +65,20 @@ for (year in years) {
 ```
 
 ```{r}
+
+#pge_year_2017 <- pge_years %>% filter(YEAR == 2017,MONTH == 9,CUSTOMERCLASS == "Elec- Commercial") %>% arrange(desc(TOTALKBTU)) %>% distinct(TOTALKBTU, .keep_all = TRUE)
+```
+
+```{r}
 pge_filter <-
   pge_years %>% 
   filter(CUSTOMERCLASS %in% c("Elec- Commercial", "Elec- Residential","Gas- Commercial","Gas- Residential")) %>% 
   group_by(CUSTOMERCLASS,MONTH,YEAR) %>%
-  summarize(TOTALKBTU = sum(TOTALKBTU, na.rm = TRUE)) %>% 
+  summarize(TOTALKBTU = sum(TOTALKBTU, na.rm = TRUE)) %>% #will take all values of TOTALKWH from the original pge_group dataframe that share the same MONTH and CUSTOMERCLASS and add them together
   mutate(DATE=paste(YEAR,MONTH,"01",sep="-") %>% as.Date())
 ```
 
-#make the chart for residential 
+Residential
 ```{r}
 pge_r_chart <- 
   pge_filter %>% 
@@ -72,11 +86,12 @@ pge_r_chart <-
   ggplot() +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
   scale_x_date(date_breaks = "2 month", date_labels = "%b-%y") +
-  geom_bar(
+  geom_line(
     aes(
       x = DATE,
       y = TOTALKBTU,
-      fill = CUSTOMERCLASS
+      fill = CUSTOMERCLASS,
+      colour = CUSTOMERCLASS
     ),
     stat = "identity",
     position = "stack"
@@ -89,12 +104,11 @@ pge_r_chart <-
  
 
 #plot
+
 pge_r_chart 
-
-
 ```
 
-#make plot for commerical
+Commercial
 ```{r}
 pge_c_chart <- 
   pge_filter %>% 
@@ -102,11 +116,12 @@ pge_c_chart <-
   ggplot() +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
   scale_x_date(date_breaks = "1 month", date_labels = "%b-%y") +
-  geom_bar(
+  geom_line(
     aes(
       x = DATE,
       y = TOTALKBTU,
-      fill = CUSTOMERCLASS
+      fill = CUSTOMERCLASS,
+      colour = CUSTOMERCLASS
     ),
     stat = "identity",
     position = "stack"
@@ -119,12 +134,14 @@ pge_c_chart <-
  
 
 #plot
+
 pge_c_chart 
 ```
+
 The commercial gas usage seemed to be slightly lower during the winter of the pandemic, where there had been cyclical peaks during the high-energy consumption months in order to heat establishments. This might have been due to the fact that fewer people were going to offices/commercial areas and therefore that reduced the need to heat them. This is most evident in December 2020 and January 2021, during the first winter of the pandemic. The electricity also was much lower during the first few months of the pandemic (starting around April 2020) which is directly related to the significant decrease in people going to commercial areas. As the pandemic went on, it is evident through the data that the commercial electricity increased back to pre-pandemic levels.
 
 The residential data plot illustrates less of a drastic change from pre-pandemic to pandemic energy usage. 
 
 This analysis of the data assumes that the population remained constant throughout the years and months and that there were no significant changes in number/size of commercial businesses over the time frame.
 
-
+The "gorilla" in this dataset is the Elec-commercial data from September 2017. This data is doubled for this month & year. 
