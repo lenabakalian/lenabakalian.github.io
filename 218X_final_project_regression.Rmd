@@ -1,0 +1,577 @@
+---
+title: "218X Final Project"
+author: "Lena Bakalian & Izzy Pilson"
+date: "11/17/2021"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+```{r, echo = FALSE, message = FALSE}
+# Imports necessary packages and downloads CalEnviroScreen (CES) dataset.
+library(tidyverse)
+library(censusapi)
+library(sf)
+library(mapview)
+library(tigris) #census tracts
+library(mapview)
+library(readxl)
+library(leaflet)
+
+ces4 <- read_excel("calenviroscreen40resultsdatadictionary_F_2021.xlsx")
+```
+
+INTRODUCTION
+
+Universally and continually consumed, drinking water – when contaminated – has the potential to cause widespread exposure to toxins. The contaminants – commonly nitrates, perchlorate, arsenic, lead, and trihalomethanes (THMs) – can incur or elevate the risks of significant human health effects, including but not limited to various forms of cancer, birth defects, nervous system, damage, and developmental disorders. Further, agricultural runoff, natural occurrence, accidental discharge, byproducts of disinfection, and industrial releases represent sources of the toxins, and thus the quality of one’s water varies with location, source, and treatment processes. A study published by National Institute of Health (NIH) in 2011 (Social Disparities in Nitrate-Contaminated Drinking Water in California’s San Joaquin Valley) found that the racial/ethnic and socio-economic characteristics of consumers correlate with the types of systems from which they receive water, presenting an environmental justice issue. More specifically, systems with a higher number of water quality compliance violations tend to serve low-income, rural populations, leading to consumption of water containing arsenic. Additionally, Latinos and renters are more likely to be exposed to dangerous level nitrates in their drinking water. While the interaction of social factors and water quality is well-documented in some areas such as the San Joaquin River Valley, we zoom in on the local Stanford community to determine whether similar trends exist when comparing East Palo Alto (EPA) to neighboring Palo Alto (PA) — given their different racial/ethnic and income demographics.
+
+East Palo Alto, historically home to a low-income, ethnic minority population, currently possesses the highest unemployment rate in San Mateo County and double the county’s average poverty rate. Prior to East Palo Alto being formally established in 1983, it was home to the county dump, a hazardous materials recycler, and a pesticide plant. In contrast, Palo Alto and Mountain View – with predominantly white bases – are more affluent and, by extension, politically powerful. Although specific literature on the drinking water quality in these areas is limited, the CA Office of Environmental Hazards points to differences in exposure to environmental pollutants between EPA and PA. With numerous toxic industry sites, East Palo Alto ranks in the state’s 94 percentile for hazardous waste; additionally, its overall pollution levels are worse than 83% of other CA Census Tracts, and its water quality falls in the lowest 17% due to high contamination. As a result, the area experiences lower property values, ecosystem harm, limited land-use, and exacerbated community health issues. Crossing Highway 101, Palo Alto is in the 16th percentile for hazardous waste; its overall pollution score puts it in the top 25% of the state, and the city experiences seven times less groundwater threats. Considering racial and socioeconomic divides as well as documented disparities in exposure to environmental hazards, the proposed project aims focuses on potential water quality injustices between East Palo Alto and its neighboring cities. Significantly, potential results indicating lower water quality and higher water contamination in East Palo Alto would be exceptionally notable given the ongoing water shortage in the city; the presence of toxins coupled with lack of water in general threatens the well-being of the community.
+
+The goal of this project is to exlore the relationship between race and drinking water quality and income and drinking water quality in East Palo Alto vs Palo Alto. 
+
+
+
+Map of Drinking Water Quality (CES4 Score) By Tract - East Palo Alto vs. Palo Alto
+```{r, echo = FALSE, message = FALSE}
+colnames(ces4)
+
+# Cleans the CES data and filters it to the drinking water quality metics for East Palo Alto and Palo Alto.
+
+ces4_clean <- ces4 %>% 
+  select(!ends_with("Pctl"))
+
+ca_tracts <- tracts("CA")
+
+select_cities <-
+  places("CA", cb = T, progress_bar = F) %>% 
+  filter(NAME %in% c("Palo Alto","East Palo Alto"))
+
+select_tracts <-
+  ca_tracts %>% 
+  st_centroid() %>% 
+  .[select_cities, ] %>% 
+  st_drop_geometry() %>% 
+  left_join(ca_tracts %>% select(GEOID)) %>% 
+  st_as_sf()
+
+select_tracts_list <-
+  select_tracts$GEOID
+
+# Maps the drinking water quality information by tract in the two cities, in which the dark purple indicates the highest quality and the yellow highlights the poorest.
+
+ces4_map <- ces4_clean %>% 
+  filter(`Census Tract` %in% as.numeric(select_tracts_list)) %>% 
+  select(`Census Tract`, "Drinking Water") %>% 
+    left_join(
+      ca_tracts %>% 
+        transmute(`Census Tract` = as.numeric(GEOID)
+        )
+    ) %>% 
+  st_as_sf() %>%
+  rename("water" = "Drinking Water")
+
+epa_map <- ces4_map %>%
+  filter(ces4_map$`Census Tract` %in% c(6081612000, 6081611900, 6081612100, 6081611800))
+
+pa_map <- ces4_map %>%
+  filter(!ces4_map$`Census Tract` %in% c(6081612000, 6081611900, 6081612100, 6081611800))
+
+water_pal <- colorNumeric(
+  palette = "RdYlBu",
+  domain = ces4_map$water
+)
+
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = ces4_map,
+    fillColor = ~water_pal(water),
+    color = "white",
+    weight = 0.5,
+    fillOpacity = 0.5,
+    label = ~water
+  ) %>%
+ addLegend(
+    data = ces4_map,
+    pal = water_pal,
+    values = ~water,
+    title = "Drinking Water Quality (CES4 Score)"
+  )
+
+#mapview(ces4_map, zcol = "water")
+```
+ANALYSIS
+
+The upper portion of the map, including the four upper tracts, is East Palo Alto while the lower thirteen tracts comprise Palo Alto. The drinking water quality indicator illustrates contamination levels in drinking water per tract. Based on the map, the two tracts with the poorest drinking water quality fall within East Palo Alto with respective contamination levels of 509.2 and 508.9. Comparatively, the tract with the best drinking water quality falls within Palo Alto, with a contamination level of 366.5. From this map, it is clear that the drinking water quality in East Palo Alto is generally poorer than in Palo Alto.
+
+Using a leaflet map, we used the CalEnviroScreen 2021 data to fill tract-level information on drinking water quality in Palo Alto and in East Palo Alto. We used a color palette that would show the variation across the range of drinking water contamination levels. We thought that this would be an effective way to portray how geographic divides are directly related to drinking water quality in this case. 
+
+Note: The unit of measurement for CES Drinking Water data is an aggregated, comprehensive score value based on the tract's percentile ranking for the following contaminants: Arsenic, Cadmium, Chromium (Hexavalent) , Dibromochloropopane, Lead, Nitrate, Perchlorate, Total Trihalomethanes, Trichloroethylene, Uranium, and Combination Radium (226, 228). It also includes any violations of Maximum Contaminant Level (MCL) Violation and Total Coliform Rule (TCR) Violation. Thus, it is difficult to tease out the exact contributors to the score. 
+
+
+```{r}
+# Downloads the Census data (racial/ethnic identity and income bracket) by tract for East Palo Alto and Palo Alto. Uses a loop for the seven unique racial/ethnic identity categories.
+
+# Census API Key
+Sys.setenv(CENSUS_KEY="c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
+
+acs_vars_2019_5yr <-
+    listCensusMetadata(
+    name = "2019/acs/acs5",
+    type = "variables"
+  )
+
+race_categories <- c(
+  "White alone",  
+  "Black or African American alone",
+  "American Indian and Alaska Native alone",
+  "Asian alone",
+  "Native Hawaiian and Other Pacific Islander alone",
+  "Some Other Race alone",
+  "Two or more Races"
+)
+
+# East Palo Alto
+epa_income_race_tract <- 
+  1:7 %>% 
+  map_dfr(function(x){
+    getCensus(
+      name = "acs/acs5",
+      vintage = 2019,
+      region = "tract:*",
+        regionin = "state:06+county:081",
+      vars = paste0("group(B19001",LETTERS[x],")"),
+    ) %>% 
+      select(ends_with("E"), tract) %>%
+      select(-c(state,NAME)) %>%
+      pivot_longer(
+        ends_with("E"),
+        names_to = "name",
+        values_to = "estimate"
+      ) %>% 
+      left_join(
+        acs_vars_2019_5yr %>% 
+          select(name, label)
+      ) %>% 
+      separate(
+        label,
+        into = c(NA, NA, "income"),
+        sep = "!!"
+      ) %>% 
+      select(-name) %>% 
+      group_by(income) %>%
+      filter(!is.na(income)) %>%
+      mutate(
+        race = race_categories[x] #distinguishes from multi-race respondents
+      )  %>%
+      filter(tract %in% select_tracts$TRACTCE) %>% 
+        mutate(
+          tract = as.numeric(paste0("6081",tract)
+        ))
+})
+
+# Palo Alto
+pa_income_race_tract <- 
+  1:7 %>% 
+  map_dfr(function(x){      #dfr= dataframe (automatic rbind)
+    getCensus(
+      name = "acs/acs5",
+      vintage = 2019,
+      region = "tract:*",
+        regionin = "state:06+county:085",
+      vars = paste0("group(B19001",LETTERS[x],")"),
+    ) %>% 
+      select(ends_with("E"), tract) %>%
+      select(-c(state,NAME)) %>%
+      pivot_longer(
+        ends_with("E"),
+        names_to = "name",
+        values_to = "estimate"
+      ) %>% 
+      left_join(
+        acs_vars_2019_5yr %>% 
+          select(name, label)
+      ) %>% 
+      separate(
+        label,
+        into = c(NA, NA, "income"),
+        sep = "!!"
+      ) %>% 
+      select(-name) %>% 
+      group_by(income) %>%
+      filter(!is.na(income)) %>%
+      mutate(
+        race = race_categories[x] #distinguishes from multi-race respondents
+      )  %>%
+      filter(tract %in% select_tracts$TRACTCE) %>% 
+        mutate(
+          tract = as.numeric(paste0("6085",tract)))
+}) 
+
+# Adds a City column, which will later distinguish between the two once the East Palo Alto and Palo Alto datasets are combined.
+
+pa_income_race_tract$City <- "Palo Alto"
+epa_income_race_tract$City <- "East Palo Alto"
+
+# For the respective cities, joins the Census datasets with the CES dataset by tract. 
+
+epa_all <- epa_income_race_tract %>% left_join(ces4_map, by = c("tract" = "Census Tract")) 
+
+pa_all <- pa_income_race_tract %>% left_join(ces4_map, by= c("tract" = "Census Tract")) 
+  
+```
+
+```{r}
+# Creates two graphs -- income and race by percent population -- which compare the two cities in terms of these factors.
+
+# Changes the dataset to show the population breakdown in each city respectively by racial/ethnic category (in percent population). 
+epa_race <-
+  epa_income_race_tract %>%
+  group_by(race) %>%
+  summarize(epa_estimate = sum(estimate)) %>%
+  mutate(epa_percent = (epa_estimate/sum(epa_estimate)*100)) %>%
+  select(race, epa_percent) %>% 
+  rename("East Palo Alto"  = "epa_percent")
+
+pa_race <-
+  pa_income_race_tract %>%
+  group_by(race) %>%
+  summarize(pa_estimate = sum(estimate)) %>%
+  mutate(pa_percent = (pa_estimate/sum(pa_estimate)*100)) %>%
+  select(race, pa_percent)  %>%
+  rename("Palo Alto"  = "pa_percent")
+
+# Does the same for income brackets.
+epa_income <-
+  epa_income_race_tract %>%
+  group_by(income) %>%
+  summarize(epa_estimate = sum(estimate)) %>%
+  mutate(epa_percent = (epa_estimate/sum(epa_estimate)*100)) %>%
+  select(income, epa_percent) %>% 
+  rename("East Palo Alto"  = "epa_percent")
+
+pa_income <-
+  pa_income_race_tract %>%
+  group_by(income) %>%
+  summarize(pa_estimate = sum(estimate)) %>%
+  mutate(pa_percent = (pa_estimate/sum(pa_estimate)*100))  %>%
+  select(income, pa_percent) %>%
+  rename("Palo Alto"  = "pa_percent")
+
+# Combines the East Palo Alto and Palo Alto datasets for race, and then, in the next chunk, for income.
+race <-
+  epa_race %>%
+  left_join(pa_race) %>%
+  pivot_longer(
+    c("East Palo Alto", "Palo Alto"),
+    names_to  = "City",
+    values_to = "Pop"
+  )
+
+income <-
+  epa_income %>%
+  left_join(pa_income) %>%
+  pivot_longer(
+    c("East Palo Alto", "Palo Alto"),
+    names_to  = "City",
+    values_to = "Pop"
+  )
+
+# Illustrates the differences in racial and income breakdown between cities by depicting race on one chart and income on the other -- both in percent population. East Palo Alto is in blue; Palo Alto is in red. 
+
+# Race
+race_chart <-
+  race %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = race,
+      y = Pop,
+      fill = City
+    ),
+    stat = "identity",
+    position = "dodge"
+  ) +
+  labs(
+    x = "Racial/Ethnic Categories",
+    y = "Percentage of Population",
+    title = "East Palo Alto and Palo Alto Race by Percent of Population",
+    fill = "City"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal"
+  ) 
+
+race_chart
+```
+ANALYSIS
+
+Using ACS-5yr (2014-2019) data (racial/ethnic identity and income bracket) by tract for East Palo Alto and Palo Alto, a loop was constructed to obtain data for the seven unique racial/ethnic identity categories. 
+
+East Palo Alto and Palo Alto race by percent population chart illustrates the differences in racial breakdown between East Palo Alto and Palo Alto in percent population. East Palo Alto is in blue; Palo Alto is in red.  This graph portrays the disproportionate number of minority groups living in East Palo Alto than in Palo Alto. For example, in East Palo Alto, 30.5% of the population is some other race alone and about 14.8% of the population is Black of African American alone. Conversely, in Palo Alto, only 0.72% of the population is some other race alone and 1.9% is Black or African American. Palo Alto's population is 65.7% white, compared to East Palo Alto's white population of 38.3%. 
+
+```{r}
+#Income
+
+income_chart <-
+  income %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = income %>% factor(levels = rev(c("Less than $10,000","$10,000 to $14,999", "$15,000 to $19,999","$20,000 to $24,999","$25,000 to $29,999","$30,000 to $34,999","$35,000 to $39,999","$40,000 to $44,999","$45,000 to $49,999","$50,000 to $59,999","$60,000 to $74,999","$75,000 to $99,999","$100,000 to $124,999", "$125,000 to $149,999", "$150,000 to $199,999","$200,000 or more"))),
+      y = Pop,
+      fill = City
+    ),
+    stat = "identity",
+    position = "dodge"
+  ) +
+  labs(
+    x = "Income Categories",
+    y = "Percentage of Population",
+    title = "East Palo Alto and Palo Alto Income by Percent of Population",
+    fill = "City"
+  )  +
+  coord_flip()  +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal"
+  ) 
+
+income_chart
+```
+ANALYSIS
+
+The East Palo Alto and Palo Alto income by percent population graph shows the income disparity between the two cities. Palo Alto's population earning more than $200,000 is 41.6% compared with the  11.06% of East Palo Alto's population. This is significant because Palo Alto's population percent that is earning this amount of income is roughly four times that of East Palo Alto's population.
+
+The combination of racial and income status of East Palo Alto could increase vulnerability regarding drinking water quality due to potential lack of resources and autonomy. 
+
+```{r}
+# Performs two equity analyses -- one of income vs. water quality and the other for race vs. water quality. Compares East Palo Alto and Palo Alto by selecting one tract from each -- the one with the worst water quality in (East Palo Alto - 509.165716 **)  and the one with the best water quality (Palo Alto - 366.5001077). For both income and race, calculates the demographic breakdown of population (proportion of population) in that tract/region of water quality.
+
+# Income vs. Water Quality Equity Analysis
+pa_income_equity <- 
+  pa_all %>% select(-race) %>% 
+  group_by(water, income) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+      group_by(water) %>%
+    filter(water == 366.5001077) %>% 
+  mutate(estimate = estimate/(sum(estimate)))
+ 
+epa_income_equity <- 
+  epa_all %>% select(-race) %>% 
+  group_by(water, income) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+      group_by(water) %>%
+      filter(water == 509.165716) %>% 
+mutate(estimate = estimate/(sum(estimate))) %>% 
+rbind(pa_income_equity) %>% 
+  mutate(city =
+           ifelse(water == 509.165716,
+                  "Poorest Water Quality (EPA - 509.165716)",
+                  "Best Water Quality (PA - 366.5001077"))
+
+income_graph <- epa_income_equity %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = estimate,
+      y = city,
+      fill = income %>% factor(levels = rev(c("Less than $10,000","$10,000 to $14,999", "$15,000 to $19,999","$20,000 to $24,999","$25,000 to $29,999","$30,000 to $34,999","$35,000 to $39,999","$40,000 to $44,999","$45,000 to $49,999","$50,000 to $59,999","$60,000 to $74,999","$75,000 to $99,999","$100,000 to $124,999", "$125,000 to $149,999", "$150,000 to $199,999","$200,000 or more")))),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "Proportion of population",
+    y = "Water quality by tract",
+    title = "Palo Alto (PA) vs East Palo Alto (EPA) Water Quality by Income",
+    fill = "Income bracket"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "right",
+    legend.direction = "vertical"
+  )  +
+  guides(
+    fill = guide_legend(
+      reverse = T
+    )
+  )
+income_graph
+```
+ANALYSIS
+
+This equity analysis calculates the demographic breakdown of population (proportion of population) in each tract/region of water quality by income. Using the tract in East Palo Alto with the poorest water quality (contaminant level of 509.2) and the tract in Palo Alto with the best water quality (contaminant level of 366.5), we compared the income levels across these two tracts. The tract with the best water quality has over half of the population earning $200,000 or more, compared to the roughly 6% of the population in the tract with poorest water quality. 
+
+```{r}
+#Race vs Water Equity Analysis
+pa_race_equity <- pa_all %>% 
+  group_by(race, water) %>%
+  summarize(estimate = sum(estimate)) %>%
+  group_by(water) %>%
+  filter(water == 366.5001077) %>% 
+   mutate(estimate = estimate/(sum(estimate)))
+
+epa_race_equity <- epa_all %>% 
+  group_by(race, water) %>%
+  summarize(estimate = sum(estimate)) %>% 
+      group_by(water) %>%
+  filter(water == 509.165716) %>%
+      mutate(estimate = estimate/(sum(estimate))) %>% 
+  rbind(pa_race_equity) %>%
+  mutate(city =
+           ifelse(water == 509.165716,
+                  "Poorest Water Quality (EPA - 509.165716)",
+                  "Best Water Quality (PA - 366.5001077"))
+
+race_graph <- epa_race_equity %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = estimate,
+      y = city,
+      fill = race),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "Water quality by tract",
+    y = "Proportion of population",
+    title = "Palo Alto (PA) vs East Palo Alto (EPA) Water Quality by Race",
+    fill = "Race categories"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "right",
+    legend.direction = "vertical"
+  )  +
+  guides(
+    fill = guide_legend(
+      reverse = T
+    )
+  )
+race_graph
+```
+ANALYSIS
+
+This equity analysis calculates the demographic breakdown of population (proportion of population) in each tract/region of water quality by race. Using the same two tracts in East Palo Alto with the poorest water quality (contaminant level of 509.2) and the tract in Palo Alto with the best water quality (contaminant level of 366.5), we compared the race breakdown across these two tracts. The tract with the best water quality has their white alone and asian alone populations comprising about 97% of the total population. Conversely, in the tract with the poorest water quality, the white alone and asian alone population comprises only 60% of the total population. This shows a much higher minority population living in the tract with poorer water quality.
+
+Statistical Analysis
+```{r}
+#East Palo Alto regression
+epa_income_race_stat <-
+  getCensus(
+      name = "acs/acs5",
+      vintage = 2019,
+      region = "tract:*",
+        regionin = "state:06+county:081",
+      vars = c(
+      "B06004E_001E",
+      "B06004I_001E",
+      "B06004D_001E",
+      "B06004A_001E",
+      "B06004B_001E",
+      "B06004C_001E",
+      "B06004F_001E",
+      "B06004G_001E",
+      "B19001_001E",
+      "B19001_014E",
+      "B19001_015E",
+      "B19001_016E",
+      "B19001_017E",
+      "B19001_002E",
+      "B19001_003E",
+      "B19001_004E",
+      "B19001_005E"
+    )
+  ) %>%
+  transmute(
+    tract = paste0("6", county, tract),
+    perc_white = B06004A_001E / (B06004E_001E + B06004I_001E + B06004D_001E +  B06004B_001E + B06004C_001E + B06004F_001E +  B06004G_001E + B06004A_001E),
+    perc_over100k = (B19001_014E + B19001_015E + B19001_016E + B19001_017E) / B19001_001E
+   # perc_under25k = (B19001_002E + B19001_003E + B19001_004E + B19001_005E) / B19001_001E,
+   # perc_nonwhite = 1 - perc_white,
+  ) %>% 
+  filter(
+    !is.na(perc_white), 
+    !is.na(perc_over100k)
+ #   !is.na(perc_under25k),
+   # !is.na(perc_nonwhite)
+  ) %>%
+  mutate(tract = as.numeric(tract))
+
+epa_stat <-
+  epa_map %>%
+  left_join(epa_income_race_stat, by = c("Census Tract" = "tract"))
+
+epa_model <- lm(water ~ perc_white + perc_over100k, epa_stat)
+
+summary(epa_model)
+```
+ANALYSIS
+
+```{r}
+#Palo Alto regression
+
+pa_income_race_stat <-
+  getCensus(
+      name = "acs/acs5",
+      vintage = 2019,
+      region = "tract:*",
+        regionin = "state:06+county:085",
+      vars = c(
+      "B06004E_001E",
+      "B06004I_001E",
+      "B06004D_001E",
+      "B06004A_001E",
+      "B06004B_001E",
+      "B06004C_001E",
+      "B06004F_001E",
+      "B06004G_001E",
+      "B19001_001E",
+      "B19001_014E",
+      "B19001_015E",
+      "B19001_016E",
+      "B19001_017E",
+      "B19001_002E",
+      "B19001_003E",
+      "B19001_004E",
+      "B19001_005E"
+    )
+  ) %>%
+  transmute(
+    tract = paste0("6", county, tract),
+    perc_white = B06004A_001E / (B06004E_001E + B06004I_001E + B06004D_001E +  B06004B_001E + B06004C_001E + B06004F_001E +  B06004G_001E + B06004A_001E),
+    perc_over100k = (B19001_014E + B19001_015E + B19001_016E + B19001_017E) / B19001_001E
+   # perc_under25k = (B19001_002E + B19001_003E + B19001_004E + B19001_005E) / B19001_001E,
+   # perc_nonwhite = 1 - perc_white,
+  ) %>% 
+  filter(
+    !is.na(perc_white), 
+    !is.na(perc_over100k)
+   # !is.na(perc_under25k),
+  #  !is.na(perc_nonwhite)
+  ) %>%
+  mutate(tract = as.numeric(tract))
+
+pa_stat <-
+  pa_map %>%
+  left_join(pa_income_race_stat, by = c("Census Tract" = "tract"))
+
+pa_model <- lm(water ~ perc_white + perc_over100k, pa_stat)
+
+summary(pa_model)
+
+```
+ANALYSIS
+
+
+
+NOTE
+
+The project aims and the datasets chosen presented unforeseen challenges in our analysis and limitations on the techniques that we could use. CalEnviroScreen data is measured by the tract, and, as a result, we imported tract-level Census ACS-5 year data for income and race (each with estimates for the different financial and ethnical categories). In attempting to directly compare water quality to income or race respectively, we realized that the only way to do so would be to operate on the tract level, as every demographic bucket per tract possessed the same CES4 Drinking Water Quality Score. However, the breakdown of Census data by estimates within specific racial and ethnic groups of a tract impeded this process, as we struggled to calculate an average/indicative income value or distinguish a dominant race per a tract to pair with the Water Quality Score. Due to this constraint, we selected two tracts — one from EPA with the highest (worst) CES4 Score and one from PA with the lowest (best) CES4 Score — and compared the two in equity analyses of Water Quality vs. Income and Water Quality vs. Race. Additionally, we attempted a statistical regression and navigated the issue discussed above by creating new variables based on set standards, such was percent over $100,000 and percent under $25,000 for annual household income as well as percent white and percent non-white for racial/ethnic identity. Here, though, we reached the obstacle of too few data points, as there are a total of 17 tracts (thus, 17 data points in EPA and PA combined). The lack of substantial data hinders the analysis as well as its interpretation. Looking back, we would consider using a different source for water quality values, potentially one with more spatial granularity, and PUMS data, allowing us to examine on the level of individual households, include replicate weights in regressions, and calculate an average income value for a geographic region.
