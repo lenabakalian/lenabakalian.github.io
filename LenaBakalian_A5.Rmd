@@ -120,7 +120,7 @@ model <- ces4_map %>%
 summary(model)
 ```
 
-An increase of PM2.5 in x is associated with an increase of Asthma in y;
+For every 1 increase in x, there is a 19.862 increase of Asthma in y with a standard error of 1.534;
 9.6% of the variation in y is explained by the variation in x. 
 
 ```{r}
@@ -155,7 +155,7 @@ log_model <- lm(log(Asthma) ~ PM2.5, ces4_map)
 summary(log_model)
 ```
 
-An increase of PM2.5 in x is associated with an increase of Asthma in log(y);
+An increase of PM2.5 in x is associated with an increase of Asthma in log(y); for every 1 increase in x, there is a 1.428079 increase of Asthma in y with a standard error of 0.02686.
 After applying the log transform, 99.7% of the variation in y is explained by the variation in x. 
 
 ```{r}
