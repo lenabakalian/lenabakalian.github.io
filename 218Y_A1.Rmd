@@ -1,0 +1,469 @@
+---
+title: "218Y Assignment 1: East Palo Alto OPA Debate"
+author: "Lena Bakalian"
+date: "1/14/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F, message = F)
+```
+
+
+```{r}
+library(tidyverse)
+library(tidycensus)
+library(censusapi)
+library(sf)
+library(mapview)
+library(tigris) #census tracts
+library(leaflet)
+library(esri2sf)
+library(plotly)
+```
+
+The city of East Palo Alto (EPA) is currently considering the implementation of an Opportunity to Purchase (OPA) policy which creates greater opportunity for tenants (renters), qualified non-profits, or the City of EPA to buy property within the city. Thinking about both sides of this debate, it would be helpful to have more information/data to better understand if there is a justified need for this policy and who this policy will affect most. 
+
+One piece of information that would be useful to obtain is the housing burden among renter, who would be the targeted group of the OPA in terms of offering ownership opportunities. This information might shine some insight into if renters would even be able to pay for the costs associated with ownership if they were offered the opportunity. 
+
+```{r}
+acs_vars_2019_5yr <-
+    listCensusMetadata(
+    name = "2019/acs/acs5",
+    type = "variables"
+  )
+```
+
+```{r}
+epa_renter <-
+  getCensus(
+    name = "acs/acs5",
+    vintage = 2019,
+    region = "tract:*", 
+    regionin = "state:06+county:081",
+    vars = "group(B25074)" #household income by gross rent as a percentage of household income
+  ) %>% 
+  select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "name",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_5yr %>% 
+      select(name, label)
+  )  %>%
+  select(-name) %>%
+  mutate(tract = as.numeric(tract)) %>% 
+  filter(tract %in% c("611800","611900","612000","612100")) %>% 
+  select(-tract) %>% 
+  select(-county) %>% 
+  group_by(label) %>% 
+  separate(
+    label,
+    into = c(NA,NA,"income","percentage"),
+    sep = "!!"
+  ) %>% 
+  group_by(income,percentage) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  filter(!is.na(income)) %>% 
+  filter(!is.na(percentage)) %>%
+  filter(percentage != "Not computed") %>%
+  mutate(
+  percentage = case_when(
+    percentage %in% c("Less than 20.0 percent", "20.0 to 24.9 percent", "25.0 to 29.9 percent") ~ "No burden",
+    percentage %in% c("30.0 to 34.9 percent", "35.0 to 39.9 percent", "40.0 to 49.9 percent") ~ "Moderate",
+      percentage == ("50.0 percent or more") ~ "Severe"
+  )) %>%
+  mutate(
+    tenure = "Renter"
+  ) 
+
+```
+
+```{r}
+#compute housing cost burden as a percentage as well as an absolute dollar amount, given a specific burden threshold, for each record
+
+threshold_moderate <- 0.3 #30% of income on housing costs
+threshold_severe <- 0.5 
+
+  
+#plot
+burden_stacked <-
+  epa_renter %>% 
+    ggplot() +
+    geom_bar(
+      aes(
+        x = percentage %>% factor(c("No burden", "Moderate", "Severe")),
+        y = estimate,
+        fill = income %>% factor(c("Less than $10,000:","$10,000 to $19,999:","$20,000 to $34,999:","$35,000 to $49,999:","$50,000 to $74,999:","$75,000 to $99,999:","$100,000 or more:"))
+      ),
+      stat = "identity",
+      position = "stack"
+    ) +
+    labs(
+      x = "Burden Level",
+      y = "Number of households",
+      title = "Housing burden within renters",
+      fill = "Income Levels"
+    ) +
+    coord_flip() +
+    theme(
+      legend.position = "bottom",
+      legend.direction = "horizontal"
+    )  +
+    guides(
+      fill = guide_legend(
+        reverse = T,
+        nrow = 3, 
+        byrow=TRUE
+    )
+)
+
+burden_stacked
+
+```
+
+
+This plot shows that, as expected, renters who are making above $75K a year are primarily not experiencing housing burden, while a majority of those who are making below $35K a year are experiencing severe housing burden (50% of their income is going to housing costs). Generally, those making under $50K are experiencing moderate housing burden (30% of their income is going toward housing costs). 
+
+To see how this information relates to OPA further, we can calculate some figures based on renter vs owner status and income category. 
+```{r}
+epa_owner <-
+  getCensus(
+    name = "acs/acs5",
+    vintage = 2019,
+    region = "tract:*", 
+    regionin = "state:06+county:081",
+    vars = "group(B25095)" #household income by selected monthly owner costs as a percentage of household income
+  ) %>% 
+  select(!c(GEO_ID,state,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "name",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_5yr %>% 
+      select(name, label)
+  )  %>%
+  select(-name) %>%
+  mutate(tract = as.numeric(tract)) %>% 
+  filter(tract %in% c("611800","611900","612000","612100")) %>% 
+  select(-tract) %>% 
+  select(-county) %>% 
+  group_by(label) %>% 
+  separate(
+    label,
+    into = c(NA,NA,"income","percentage"),
+    sep = "!!"
+  ) %>% 
+  group_by(income,percentage) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  filter(!is.na(income)) %>% 
+  filter(!is.na(percentage)) %>%
+  mutate(
+    tenure = "Owner"
+  ) %>%
+    filter(percentage != "Not computed") %>%
+  mutate(
+  percentage = case_when(
+    percentage %in% c("Less than 20.0 percent", "20.0 to 24.9 percent", "25.0 to 29.9 percent") ~ "No burden",
+    percentage %in% c("30.0 to 34.9 percent", "35.0 to 39.9 percent", "40.0 to 49.9 percent") ~ "Moderate",
+      percentage == ("50.0 percent or more") ~ "Severe"
+  ))
+
+epa_combined <-
+  epa_renter %>%
+  rbind(epa_owner)
+```
+
+Here, the overall percentage of renter-occupied units in EPA can be calculated, which comes out to be 57.8%.
+```{r}
+#overall % of renter-occupied units
+renter_occupied <- 
+  epa_combined %>% 
+  select(-c(income,percentage)) %>% 
+  group_by(tenure) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  mutate(
+    total = sum(estimate)
+  ) %>% 
+  filter(tenure == "Renter")
+
+renter_occupied$estimate/renter_occupied$total
+```
+
+The overall percentage of owner-occupied units in EPA is thus 42.2%. It is clear that renter-occupied units are in the slight majority in terms of types of occupants in EPA.
+```{r}
+owner_occupied <- 
+  epa_combined %>% 
+  select(-c(income,percentage)) %>% 
+  group_by(tenure) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  mutate(
+    total = sum(estimate)
+  ) %>% 
+  filter(tenure == "Owner") 
+
+owner_occupied$estimate/owner_occupied$total
+```
+
+Next, the percentage of severely burdened households that are renter households is calculated, using the threshold of 50% (0.5) of income going towards housing cost. This percentage comes out to 65.9%. 
+```{r}
+#% of severely burdened households are renter households
+burdened_renter <-
+  epa_combined %>% 
+  filter(percentage == "Severe") %>% 
+  select(-c(income,percentage)) %>%
+  group_by(tenure) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  mutate(
+    total = sum(estimate)
+  ) %>% 
+  filter(tenure == "Renter")
+
+burdened_renter$estimate/burdened_renter$total
+```
+
+Thus, the percentage of burdened households that are owner households is 34.1%. These percentages show that the housing burden for severely burdened households falls primarily upon renters rather than owners. This is significant when thinking about the OPA debate, as it suggests that renters are already facing cost challenges relating to housing payments, so an opportunity for housing ownership will likely not be very accessible to many of these tenants. 
+
+```{r}
+#% of burdened households are owner households
+1-(burdened_renter$estimate/burdened_renter$total)
+```
+
+In order to calculate total housing cost, we assumed a mean income value for each income category. For example, if the income category was "$10,000 to $19,999", we selected $15,000 as the value. This number was then multiplied by the percentage of burden (ie. no burden is 15%, moderate burden is 30%, and severe burden is 50% of income spent on housing) and then multiplied by the estimate of households to obtain a dollar amount. These dollar amounts were then summed, reaching a value of $212,886,500. 
+```{r}
+#total cost
+total_cost <-
+  epa_combined %>% 
+  mutate( 
+  income = case_when(
+    income == "$10,000 to $19,999:" ~ "15000",
+    income == "$20,000 to $34,999:" ~ "27500",
+    income == "$35,000 to $49,999:" ~ "47500",
+    income == "$50,000 to $74,999:" ~ "62500",
+    income == "$75,000 to $99,999:" ~ "87500",
+    income == "$100,000 or more:" ~ "300000",
+    income == "$100,000 to $149,999:" ~ "125000",
+    income == "$150,000 or more:" ~ "300000",
+    income == "Less than $10,000:" ~ "5000"
+    )) %>% 
+  mutate(
+    percentage = case_when(
+  percentage == "No burden" ~ "0.15", 
+  percentage == "Moderate" ~ "0.30",
+  percentage == "Severe" ~ "0.50"
+  )) %>% 
+  mutate(
+    dollars = as.numeric(income)*as.numeric(percentage)*as.numeric(estimate)
+  )
+
+sum(total_cost$dollars) %>% prettyNum(",") %>% paste0("$",.)
+```
+
+Calculating the total burdened cost, we used the same assumptions regarding income category but removed the non-burdened category to focus on just those who are housing burdened in EPA. Thus, we arrive at a value of $95,366,750 of total housing burden cost in EPA.
+```{r}
+total_burdened_cost <-
+  epa_combined %>% 
+  mutate( 
+  income = case_when(
+    income == "$10,000 to $19,999:" ~ "15000",
+    income == "$20,000 to $34,999:" ~ "27500",
+    income == "$35,000 to $49,999:" ~ "47500",
+    income == "$50,000 to $74,999:" ~ "62500",
+    income == "$75,000 to $99,999:" ~ "87500",
+    income == "$100,000 or more:" ~ "300000",
+    income == "$100,000 to $149,999:" ~ "125000",
+    income == "$150,000 or more:" ~ "300000",
+    income == "Less than $10,000:" ~ "5000"
+    )) %>% 
+  mutate(
+    percentage = case_when(
+  percentage == "No burden" ~ "0.15", 
+  percentage == "Moderate" ~ "0.30",
+  percentage == "Severe" ~ "0.50"
+  )) %>% 
+  filter(percentage != "0.15") %>% 
+  mutate(
+    dollars = as.numeric(income)*as.numeric(percentage)*as.numeric(estimate)
+  )
+
+sum(total_burdened_cost$dollars) %>% prettyNum(",") %>% paste0("$",.)
+```
+
+
+Looking at parcel data can help visualize changes in ownership and better understand the current renter/owner landscape in EPA. 
+
+```{r}
+epa_zoning <- esri2sf("https://services8.arcgis.com/0IC8hha3hgQkmGoa/arcgis/rest/services/EastPaloAltoZoning_2021_WFL1/FeatureServer/1")
+
+smc_exemption <- read_csv("https://datahub.smcgov.org/api/views/pmvw-bs84/rows.csv?accessType=DOWNLOAD")
+```
+
+```{r}
+epa_exemption <- smc_exemption %>% 
+  mutate(
+    APN = `Parcel Number` %>% 
+      str_replace_all("-","")
+  ) %>% 
+  filter(APN %in% epa_zoning$APN) %>% 
+  left_join(epa_zoning) %>% 
+  st_as_sf() %>% 
+  filter(New_Zone == "R-LD")
+```
+
+The figures showing changes in ownership/rentership from 2016 to 2019 are shown in the table below. What is significant here is the number from renter to owner-occupied units had the least change. Also significant is the number that remained renter-occupied, suggesting a lack of motivation or ability (as some reasons) to move from rentership to ownership.
+
+```{r}
+epa_changes <-
+  epa_exemption %>%
+  filter(`Fiscal Year` %in% c("2015/2016","2018/2019")) %>%
+  select(`Parcel Number`,`Fiscal Year`,`Net Value`,Exemption, geoms) %>%
+  filter(Exemption <= 7000) %>%
+  #pivot_wider(names_from = `Parcel Number`, values_from = `Net Value`)
+  group_by(`Parcel Number`) %>%
+  arrange(`Fiscal Year`) %>%
+  arrange(`Parcel Number`) %>%
+  mutate(
+    tenure_2016 = first(Exemption),
+    tenure_2019 = last(Exemption)
+  ) %>%
+  mutate(
+    tenure_change = case_when(
+      tenure_2016 == tenure_2019 & tenure_2019 %in% c("5600","7000") ~ "Remained Owner-occupied",
+      tenure_2016 != tenure_2019 & tenure_2019 %in% c("5600","7000") ~ "Renter to Owner-occupied",
+      tenure_2016 != tenure_2019 & tenure_2019 == 0 ~ "Owner to renter-occupied",
+      tenure_2016 == tenure_2019 & tenure_2019 == 0 ~ "Remained renter-occupied"
+    )
+  ) %>%
+  filter(`Fiscal Year` == "2015/2016") %>%
+  select(-`Fiscal Year`) %>%
+  filter(!is.na(tenure_change))
+
+no_geom <-
+  epa_changes %>%
+  st_drop_geometry()
+
+count <-
+  no_geom %>%
+  ungroup(`Parcel Number`) %>%
+  select(tenure_change) %>%
+  group_by(tenure_change) %>%
+  count()
+
+knitr::kable(count)
+
+```
+
+Next, we can plot the parcels that have remained renter-occupied, remained owner-occupied, went from owner to renter-occupied, and went from renter to owner-occupied from 2016 to 2019.
+
+```{r}
+leaflet() %>% 
+  addProviderTiles(provider = providers$CartoDB.Positron) %>% 
+  #renters and didnt change
+  addPolygons(
+    data = epa_changes %>% 
+      filter(tenure_change == "Remained renter-occupied"),
+    fillColor = "yellow",
+    color = "black",
+    weight = 0.5,
+    fillOpacity = 1
+  ) %>% 
+    #owners and didnt change
+    addPolygons(
+    data = epa_changes %>%
+      filter(tenure_change == "Remained Owner-occupied"),
+    fillColor = "red",
+    color = "black",
+    weight = 0.5,
+    fillOpacity = 1
+  ) %>%
+    #renters and did change
+  addPolygons(
+    data = epa_changes %>% 
+      filter(tenure_change == "Owner to renter-occupied"),
+    fillColor = "purple",
+    color = "black",
+    weight = 0.5,
+    fillOpacity = 1
+  ) %>%
+  #owners and did change
+  addPolygons(
+    data = epa_changes %>%
+      filter(tenure_change == "Renter to Owner-occupied"),
+    fillColor = "green",
+    color = "black",
+    weight = 0.5,
+    fillOpacity = 1
+  ) %>% 
+  addLegend(
+    "bottomleft",
+    data = epa_changes,
+    colors =c("yellow",  "red", "purple", "green"),
+    labels= c("Renters changed", "Renters unchanged", "Owners changed", "Owners unchanged"),
+    title = "Renters (unchanged vs changed) &<br>Owners (unchanged vs changed) in EPA<br>from 2015 to 2018",
+    opacity = 1
+  )
+```
+
+
+To plot this map, we compared the net value of a parcel from 2016 to 2019. If the value changed significantly, we flagged the parcel as "changed", due to Prop 13, which prevents value from changing if the occupant remains the same. A value of 8% was used to adjust for inflation in parcel costs. Using the tax exemption values of $5600 and $7000, owners vs renters (no exemption value) were able to be distinguished. 
+
+This map shows a relatively homogeneous mix of renters that have changed and renters that have not changed. The owners who have changed and owners who have unchanged are far less in comparison, but considering that there are slightly more renter-occupied units in EPA, this makes sense. While there was a significant percent of renters who remained in their units, there was also a lot of change in renter occupancy during these four years, which could be a further point against OPA, which would potentially limit the amount of rental units available. 
+
+
+
+```{r}
+epa_value <-
+  epa_exemption %>%
+  filter(Exemption <= 7000) %>%
+  mutate(
+    tenure = case_when(
+      Exemption %in% c("5600","7000") ~ "Owner",
+      TRUE ~ "Renter"
+    )
+  ) %>%
+  group_by(`Fiscal Year`, tenure)
+
+
+
+epa_chart <-
+  epa_value %>% 
+  ggplot() +
+  geom_bar(
+      aes(
+        x = `Fiscal Year`,
+        y = `Net Value`,
+        fill = tenure
+      ),
+      stat = "identity",
+      position = "stack"
+    ) +
+    labs(
+      x = "Year",
+      y = "Net Value ($)",
+      title = "Net Parcel Value over Time in EPA",
+      fill = "Tenure"
+    )
+
+epa_chart
+```
+
+
+In this chart, the net value of the respective owner and renter parcels are plotted against the four fiscal years analyzed in this study. It is clear here that there is an increasing trend in the net value of renter parcels. There is also a slight increase in owner parcel net value. However, the ratio of owner to renter parcel net value becomes more disproportionate from 2016 to 2019, with renter parcel net value outweighing owner parcel net value. From a pro-OPA standpoint, this plot illustrates the need for more ownership opportunity in EPA. It could be argued that in order to recenter this balance between owner and renter parcel net value, OPA could generate of more ownership opportunity and minimize this disproportionality. 
+
+However, as the income numbers illustrated above, it is unclear whether OPA is the best way to introduce ownership opportunity in EPA. Since most owners are the ones who are most strongly opposed to OPA, and since it remains uncertain whether current tenants are interested/able to afford owning units offered to them, it might make most sense to table this policy for now until further research is conducted or until more revisions are made to the current proposition (ie. removing single family residences).
+
+Further analysis on this topic could include mapping places that new, affordable units could be built where existing zoning laws permit, which would provide another potential solution to the housing crisis. Other considerations could be evaluating the cost of ownership in relation to the income of the majority of renters. A concern with OPA is that even if tenants become owners through OPA, there are still many other costs related to ownership and cost of living that are increasing. When aiming to avoid displacement, this is a consideration for the larger picture.
+
+It is important to note that the burden thresholds based on overall income could present inaccurate data. For example, if a household was making $500K but spent $250K on their housing, this would flag them as severely housing burdened. While EPA is an overall low-income city, this point is important to keep in mind. 
+
+Note: This assignment was completed in partnership with Catherine Beck and Daphne Jacobsberg.
+
+
+
+
+
+-
