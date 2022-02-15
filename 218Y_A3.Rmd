@@ -1,0 +1,871 @@
+---
+title: "218Y Assignment 3: GHG Emissions in Mountain View (Zip Code 94043)"
+author: "Lena Bakalian"
+date: "2/15/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+```
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(tigris)
+library(sf)
+library(leaflet)
+library(tidycensus)
+library(censusapi)
+library(mapview)
+library(esri2sf)
+library(plotly)
+library(knitr)
+library(mapboxapi)
+library(stringr)
+
+Sys.setenv(CENSUS_KEY="c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
+
+acs_vars_2019_5yr <-
+  listCensusMetadata(
+    name = "2019/acs/acs5",
+    type = "variables"
+  )
+```
+
+
+For this analysis, we thought it would be interesting to examine the emissions related to zipcode of one of the tech campuses in this area. We decided to choose the zipcode (94043) where the GooglePlex campus is located, in Mountain View, California.
+
+
+<h3> Analysis of Vehicle Emissions </h3>
+
+
+Using LODES 2013 to 2019 data, we are able to calculate commute emissions for this zip code  as both an origin and destination. 
+
+```{r}
+lodes <- readRDS("ca_od.rds")
+```
+
+```{r}
+#Load in zipcodes
+zctas <- zctas(progress_bar = F)
+
+zip <- zctas %>% 
+  filter(GEOID10 == "94043")
+
+#we chose the google campus to examine
+
+# blocks <- blocks("CA")
+# 
+# block_sc <- blocks %>%
+#   filter(COUNTYFP10 == "085")
+# 
+# zip_blocks <- block_sc %>%
+#   st_centroid() %>%
+#   .[zip, ]
+# 
+# zip_blocks <- saveRDS(zip_blocks, "zip_blocks.rds")
+zip_blocks <- readRDS("zip_blocks.rds")
+```
+
+```{r}
+# full_zip_od <- 2013:2019 %>% 
+#   map_dfr(function(year){
+#     
+#     print(year)
+#     
+#     temp <- read_csv("ca_od_main_JT01_", year, ".csv.gz") %>% 
+#       filter(
+#         h_geocode %in% zip_blocks$GEOID10 |
+#           w_geocode %in% zip_blocks$GEOID10
+#       ) %>% 
+#       mutate(year = year)
+#     
+#     saveRDS(temp, paste0("temp_od_", year, ".rds"))
+#     
+#     return(temp)
+#     
+#   })
+
+full_zip_od <- readRDS("full_zip_od.rds")
+```
+
+```{r}
+full_zip_od_clean <- full_zip_od %>% 
+  select(-createdate) %>% 
+  filter(!(
+    h_geocode %in% zip_blocks$GEOID10 &
+      w_geocode %in% zip_blocks$GEOID10
+  )) %>% 
+  mutate(
+    direction = ifelse(
+      h_geocode %in% zip_blocks$GEOID10,
+      "outbound",
+      "inbound"
+    )
+  )
+```
+
+```{r}
+full_zip_od_routing <- full_zip_od_clean %>% 
+  mutate(
+    origin = ifelse(
+      direction == "inbound",
+      h_geocode,
+      w_geocode
+    ),
+    cbg = origin %>% substr(1,12),
+    tract = origin %>% substr(1,11)
+  ) %>%
+  filter(!duplicated(cbg)) #origin, cbg and then tract for different levels of granularity
+```
+
+```{r}
+ca_cbgs <- block_groups("CA", cb = T, progress_bar = F)
+
+zip_od_origin <-
+  full_zip_od_routing %>%
+  select(cbg) %>%
+  left_join(ca_cbgs %>% select(cbg = GEOID)) %>%
+  st_as_sf() %>%
+  st_centroid() %>%
+  st_coordinates()
+
+zip_od_destination <-
+  zip %>%
+  st_centroid() %>%
+  st_coordinates()
+  
+```
+
+```{r}
+# zip_od_route <- 
+#   1:nrow(zip_od_origin) %>%
+#   map_dfr(function(x){
+#     
+#     tryCatch(
+#       mb_directions(
+#         origin = zip_od_origin[x, ],
+#         destination = zip_od_destination,
+#         profile = "driving-traffic"
+#       ) %>% 
+#         mutate(id = x),
+#       error = function(e){
+#         data.frame(id = x)
+#       }
+#     )
+#   }) %>% 
+#   st_as_sf()
+
+zip_od_route <- readRDS("zip_od_route.rds")
+```
+
+```{r}
+leaflet() %>%
+  addTiles() %>%
+  addPolylines(
+    data = zip_od_route
+  )
+```
+
+```{r}
+full_zip_od_routed <- 
+  full_zip_od_routing %>%
+  cbind(zip_od_route)
+
+#made assumption that there are 261 working days per yr
+
+full_zip_od_final <- full_zip_od_clean %>% 
+  mutate(
+    origin = ifelse(
+      direction == "inbound",
+      h_geocode,
+      w_geocode
+    ),
+    cbg = substr(origin, 1, 12)
+  ) %>% 
+  left_join(
+    full_zip_od_routed %>% 
+      select(cbg, duration, distance)
+  ) %>% 
+  mutate(
+    visits = S000 * 261 
+  )
+```
+
+
+```{r}
+#origin_bgs_normalized = full_zip_od_routing
+#stanford_route = zip_od_route
+
+# travel_time_mode <-
+#   counties("CA", cb = T, progress_bar = F) %>%
+#   pull(COUNTYFP) %>% 
+#   map_dfr(function(x){
+#     getCensus(
+#       name = "acs/acs5",
+#       vintage = 2019,
+#       region = "block group:*",
+#       regionin = paste0("state:06+county:", x),
+#       vars = "group(B08134)"
+#     )
+#   }) %>% 
+#   mutate(
+#     cbg =
+#       paste0(state,county,tract,block_group)
+#   )
+# 
+# saveRDS(travel_time_mode, "travel_time_mode.rds")
+# travel_time_mode <- readRDS("travel_time_mode.rds")
+# 
+# travel_time_mode_v2 <- travel_time_mode %>%
+#   filter(cbg %in% full_zip_od_final$cbg) %>% 
+#   select(!c(GEO_ID,state,county,tract,block_group,NAME) & !ends_with(c("EA","MA","M"))) %>%
+#   pivot_longer(
+#     ends_with("E"),
+#     names_to = "variable",
+#     values_to = "estimate"
+#   ) %>%
+#   left_join(
+#     acs_vars_2019_5yr %>% 
+#       select(name, label), 
+#     by = c("variable" = "name")
+#   ) %>% 
+#   select(-variable) %>% 
+#   separate(
+#     label,
+#     into = c(NA, NA, "total", "mode", "carpool", "time"),
+#     sep = "!!"
+#   ) %>% 
+#   mutate(
+#     mode = case_when(
+#       total %in% c(
+#         "Less than 10 minutes",
+#         "10 to 14 minutes",
+#         "15 to 19 minutes",
+#         "20 to 24 minutes",
+#         "25 to 29 minutes",
+#         "30 to 34 minutes",
+#         "35 to 44 minutes",
+#         "45 to 59 minutes",
+#         "60 or more minutes"
+#       ) ~ "Total",
+#       mode == "Drove alone:" ~ mode,
+#       carpool %in% c(
+#         "In 2-person carpool:",
+#         "In 3-or-more-person carpool:"
+#       ) ~ carpool
+#     ),
+#     time = case_when(
+#       mode == "Total" ~ total,
+#       mode == "Drove alone:" ~ carpool,
+#       mode == carpool ~ time
+#     )
+#   ) %>% 
+#   filter(!is.na(time)) %>% 
+#   select(-total, -carpool) %>% 
+#   pivot_wider(
+#     names_from = mode,
+#     values_from = estimate
+#   ) %>% 
+#   mutate(
+#     perc_veh1 = `Drove alone:`/Total,
+#     perc_veh2 = `In 2-person carpool:`/Total,
+#     perc_veh3 = `In 3-or-more-person carpool:`/Total
+#   )
+# 
+# saveRDS(travel_time_mode_v2, "travel_time_mode_v2.rds")
+travel_time_mode_v2 <- readRDS("travel_time_mode_v2.rds")
+```
+
+```{r}
+mtvw_trips <-
+  full_zip_od_final %>% #used to be origin_cbgs_normalized
+  # cbind(
+  #   zip_od_route %>% #used to be stanford_route
+  #     st_drop_geometry()
+  # ) %>% 
+  mutate(
+    time = case_when(
+      duration < 10 ~ "Less than 10 minutes",
+      duration < 15 ~ "10 to 14 minutes",
+      duration < 20 ~ "15 to 19 minutes",
+      duration < 25 ~ "20 to 24 minutes",
+      duration < 30 ~ "25 to 29 minutes",
+      duration < 35 ~ "30 to 34 minutes",
+      duration < 45 ~ "35 to 44 minutes",
+      duration < 60 ~ "45 to 59 minutes",
+      TRUE ~ "60 or more minutes"
+    )
+  ) %>% 
+  left_join(
+    travel_time_mode_v2 %>% 
+      select(
+        cbg = cbg,
+        time,
+        perc_veh1,
+        perc_veh2,
+        perc_veh3
+      ),
+    by = c("cbg", "time")
+  ) %>% 
+  mutate(
+    vehicles = 
+      visits * perc_veh1 + 
+      visits * perc_veh2 / 2 +
+      visits * perc_veh3 / 3,
+    vmt = vehicles * distance * 2
+  )
+```
+
+Vehicle miles traveled were calculated based on the sum of the equation: vehicles * distance * 2 (since each trip generally has a return trip associated with it). We also made the assumption that there were 261 working days per year (5 days/week * 52 weeks).
+
+Vehicle miles traveled:
+```{r}
+sum(mtvw_trips$vmt, na.rm = T) %>% prettyNum(",")
+```
+
+```{r}
+emfac <- 
+  read_csv("EMFAC2021-EI-202xClass-BayAreaAQMD-2021-Summer-20220208180432.csv", skip = 8) %>% 
+  transmute(
+    Category = `Vehicle Category`,
+    Fuel_Type = Fuel,
+    Percent_Trips = Trips/sum(Trips),
+    Percent_Miles = `Total VMT`/sum(`Total VMT`),
+    `MTCO2_Running_Exhaust` = CO2_RUNEX/`Total VMT`,
+    `MTCO2_Start_Exhaust` = CO2_STREX/Trips
+  )
+```
+
+```{r}
+mtvw_trips_ghg <-
+  emfac %>% 
+  mutate(
+    trips = Percent_Trips * sum(mtvw_trips$visits, na.rm = T),
+    vmt = Percent_Miles * sum(mtvw_trips$vmt, na.rm = T),
+    ghg = vmt*MTCO2_Running_Exhaust + trips*MTCO2_Start_Exhaust*2
+  )
+```
+
+Total GHG emissions based on vehicle miles traveled:
+
+```{r}
+sum(mtvw_trips_ghg$ghg) %>% prettyNum(",")
+```
+
+
+<h3> Analysis of Building Emissions </h3>
+
+Here we are using PG&E data from 2013 to 2019 at the ZIP code level (94043) to analyze building emissions. The analysis includes both residential and commercial electricity and gas usage. We are using Census population data (ACS 5-year 2019) to estimate residential energy use per resident, and LODES WAC data to estimate commercial energy use per job.
+
+
+```{r}
+#Download PG&E Data
+
+# pge_data <- 
+#   2013:2019 %>% 
+#   map_dfr(function(yr){
+#     
+#     factor <- 
+#       pge_elec_emissions_factor %>% 
+#       filter(year == yr) %>% 
+#       pull(factor)
+#     
+#     1:4 %>% 
+#       map_dfr(function(quarter){
+#         
+#         c("Electric","Gas") %>% 
+#           map_dfr(function(type){
+#             
+#             filename <-paste0("/Volumes/GoogleDrive-110275654074378237038/Shared drives/SFBI/Data Library/PG&E/",
+#               
+#                 "PGE_",
+#                 yr,
+#                 "_Q",
+#                 quarter,
+#                 "_",
+#                 type,
+#                 "UsageByZip.csv"
+#               )
+#             
+#             temp <- read_csv(filename)
+#             
+#             if(yr == 2017 & quarter == 4) {
+#               temp <- 
+#                 temp %>% 
+#                 filter(MONTH != 9)
+#             }
+#             
+#             temp <-
+#               temp %>% 
+#               rename_all(toupper) %>% 
+#               mutate(
+#                 TOTALKBTU = ifelse(
+#                   substr(CUSTOMERCLASS,1,1) == "E",
+#                   TOTALKWH * 3.412,
+#                   TOTALTHM * 99.976
+#                 ),
+#                 TOTALTCO2E = ifelse(
+#                   substr(CUSTOMERCLASS,1,1) == "E",
+#                   TOTALKWH/1000 * factor * 0.000453592,
+#                   TOTALTHM * 0.00531
+#                 )
+#               ) %>% 
+#               select(
+#                 ZIPCODE,
+#                 YEAR,
+#                 MONTH,
+#                 CUSTOMERCLASS,
+#                 TOTALKBTU,
+#                 TOTALTCO2E,
+#                 TOTALCUSTOMERS
+#               )
+#             
+#           })
+#         
+#       })
+#     
+#   })
+# 
+# saveRDS(pge_data, "pge_data.rds")
+pge_data <- readRDS("pge_data.rds")
+```
+
+```{r}
+# us_zips <- 
+#   zctas(cb = T, progress_bar = F)
+
+# saveRDS(us_zips, "us_zips.rds")
+us_zips <- readRDS("us_zips.rds")
+
+sc_zips <- 
+  us_zips %>% 
+  st_centroid() %>% 
+  .[counties("CA", cb = T, progress_bar = F) %>% filter(NAME == "Santa Clara"), ] %>% 
+  st_drop_geometry() %>% 
+  left_join(us_zips %>% select(GEOID10)) %>% 
+  st_as_sf() %>% 
+  st_transform(4326)
+```
+
+```{r}
+# mtvw_zips <-
+#   sc_zips %>% 
+#   filter(GEOID10 %in% c("94039","94043","94040","94085","94041","94303","94042"))
+```
+
+```{r}
+mtvw_pge_data <-
+  pge_data %>% 
+  filter(ZIPCODE == "94043") %>% 
+  filter(CUSTOMERCLASS %in% c(
+    "Elec- Commercial",
+    "Elec- Residential",
+    "Gas- Commercial",
+    "Gas- Residential"
+  )) %>% 
+  mutate(
+    ENERGYTYPE = substr(CUSTOMERCLASS,1,1)
+  ) %>% 
+  group_by(ZIPCODE, ENERGYTYPE, YEAR, CUSTOMERCLASS) %>% 
+  summarize(
+    TOTALKBTU = sum(TOTALKBTU, na.rm=T),
+    TOTALTCO2E = sum(TOTALTCO2E, na.rm=T), 
+    TOTALCUSTOMERS = mean(TOTALCUSTOMERS, na.rm=T)
+  ) %>% 
+  group_by(ENERGYTYPE, YEAR, CUSTOMERCLASS) %>%
+  summarize(across(
+    c(TOTALKBTU,TOTALTCO2E,TOTALCUSTOMERS),
+    ~sum(.,na.rm=T)
+  ))
+```
+
+Here, the Mountain View annual energy usage per year from 2013 to 2019 is plotted. The electric-residential energy usage has the least GBTU per year among all of the types, while the electric-commercial energy usage is significantly greater than the other types of energy usage. This relates to the question of the amount of electricity consumption that GooglePlex itself contributes to this total.
+
+```{r}
+#consumption
+ggplot(
+  mtvw_pge_data, 
+  aes(
+    x = as.factor(YEAR), 
+    y = TOTALKBTU/1000000
+  )
+) + 
+  geom_bar(stat = "identity", aes(fill = CUSTOMERCLASS), position = "dodge") + 
+  labs(x = "Year", y = "GBTU", title = "Mountain View Annual Energy Usage, 2013 to 2019") + 
+  scale_fill_discrete(name="Energy Type")
+```
+
+```{r}
+# population <-
+#     getCensus(
+#       name = "acs/acs5",
+#       vintage = 2019,
+#       region = "block group:*",
+#       regionin = paste0("state:06+county:085"),
+#       vars = "group(B01001)"
+#     ) %>%
+#   filter(tract == "509404") %>%
+#   filter(block_group == "3") %>%
+#   select(B01003_001E)
+
+#therefore population is 1856
+pop <- 1856
+
+```
+
+The plot below shows the breakdown of residential energy usage divided by the population of the 94043 zip code, which we found to be 1,856 people based on ACS 5-year 2019 data. The gas energy usage is almost doubles that of electric per person. 
+
+```{r}
+#per person
+
+mtvw_pge_data_clean <-
+  mtvw_pge_data %>%
+  filter (CUSTOMERCLASS %in% c("Elec- Residential", "Gas- Residential"))
+
+ggplot(
+  mtvw_pge_data_clean, 
+  aes(
+    x = as.factor(YEAR), 
+    y = (TOTALKBTU/1000000)/pop
+  )
+) + 
+  geom_bar(stat = "identity", aes(fill = CUSTOMERCLASS), position = "dodge") + 
+  labs(x = "Year", y = "GBTU", title = "Mountain View Annual Residental Energy Usage per Person, 2013 to 2019") + 
+  scale_fill_discrete(name="Energy Type")
+```
+
+In the plot below, each energy usage is plotted by the amount of carbon dioxide emissions produced per year. It is interesting to note the dramatic decrease of emissions from electric-commercial usage. As discussed in class, this is potentially due to new regulations or shifts within PG&E to produce more electricity from renewable sources. 
+
+```{r}
+#pollutants
+ggplot(
+  mtvw_pge_data, 
+  aes(
+    x = as.factor(YEAR), 
+    y = TOTALTCO2E
+  )
+) + 
+  geom_bar(stat = "identity", aes(fill = CUSTOMERCLASS), position = "dodge") + 
+  labs(x = "Year", y = "tCO2e", title = "Mountain View Annual Energy Usage, 2013 to 2019") + 
+  scale_fill_discrete(name="Energy Type")
+```
+
+The plot below illustrates electric-residential and gas-residential carbon dioxide emissions per person from 2013 to 2019. Again, we see a decrease in electric-residential over the years, with 2019 being almost zero. Further research into this is necessary in order to reveal some of the key drivers of this decrease.
+
+```{r}
+#per person
+ggplot(
+  mtvw_pge_data_clean, 
+  aes(
+    x = as.factor(YEAR), 
+    y = TOTALTCO2E/pop
+  )
+) + 
+  geom_bar(stat = "identity", aes(fill = CUSTOMERCLASS), position = "dodge") + 
+  labs(x = "Year", y = "tCO2e", title = "Mountain View Annual Residental Energy Usage per person, 2013 to 2019") + 
+  scale_fill_discrete(name="Energy Type")
+```
+
+
+
+
+```{r}
+# lodes_wac <- 2013:2019 %>% 
+#   map_dfr(function(year){
+# 
+#     print(year)
+# 
+#     temp <- read_csv(paste0("ca_wac_S000_JT00_", year, ".csv.gz")) %>%
+#       select(C000, w_geocode) %>%
+#       mutate(year = year)
+#     
+#     saveRDS(temp, paste0("temp_wac_", year, ".rds"))
+# 
+#     return(temp)
+# 
+#   })
+# 
+# saveRDS(lodes_wac, "lodes_wac.rds")
+lodes_wac <- readRDS("lodes_wac.rds")
+
+lodes_wac_clean <-
+  lodes_wac %>%
+  filter(w_geocode %in% zip_blocks$GEOID10) %>%
+  group_by(year) %>%
+  summarise(C000 = sum(C000)) %>%
+  rename(jobs = C000)
+```
+
+Here we used the Cal-Adapt Degree Day tool to collect heating degree days (HDDs) and cooling degree days (CDDs) for this zipcode from 2013 to 2019 to further normalize the data.
+
+```{r}
+hdd <- read_csv("HDDchart_clean.csv")
+cdd <- read_csv("CDDchart_clean.csv")
+```
+
+
+```{r}
+# using the CanESM2 (Average) values
+
+mtvw_pge_data_gas <-
+  mtvw_pge_data %>%
+  filter(ENERGYTYPE == "G") %>%
+  select(YEAR, CUSTOMERCLASS, TOTALKBTU)
+```
+
+In the plot below, the residential gas heating annual energy usage per resident (KBTU) is plotted. The values are fairly consistent over the years, hovering around 90 KBTU. 
+
+```{r}
+#a graph of residential gas (KBTU/resident/HDD)
+mtvw_pge_data_gas_resd <-
+  mtvw_pge_data_gas %>%
+  filter(CUSTOMERCLASS == "Gas- Residential") %>%
+  select(YEAR, TOTALKBTU) %>%
+  cbind(hdd) %>%
+  select(-year) %>%
+  rename(hdd = `CanESM2 (Average)`)
+
+
+ggplot(
+  mtvw_pge_data_gas_resd, 
+  aes(
+    x = as.factor(YEAR), 
+    y = (TOTALKBTU/pop)/hdd
+  )
+) + 
+  geom_bar(stat = "identity", position = "dodge", fill = "red") + 
+  labs(x = "Year", y = "KBTU", title = "Mountain View Residential Gas Heating Annual Energy Usage per resident \nnormalized, 2013 to 2019")
+```
+
+In the plot below, the commercial gas heating annual energy usage (KBTU) per job is plotted. The values are slightly more variable than the residential HDD plot, but are much lower in absolute value. This makes sense, considering that residential homes heat have higher heating needs than commercial buildings.
+
+```{r}
+#commercial gas (KBTU/job/HDD)
+mtvw_pge_data_gas_comm <-
+  mtvw_pge_data_gas %>%
+  filter(CUSTOMERCLASS == "Gas- Commercial") %>%
+  select(YEAR, TOTALKBTU) %>%
+  cbind(hdd) %>%
+  select(-year) %>%
+  rename(hdd = `CanESM2 (Average)`) %>%
+  cbind(lodes_wac_clean) %>%
+  select(-year)
+  
+ggplot(
+  mtvw_pge_data_gas_comm, 
+  aes(
+    x = as.factor(YEAR), 
+    y = (TOTALKBTU/jobs)/hdd
+  )
+) + 
+  geom_bar(stat = "identity", position = "dodge", fill = "red") + 
+  labs(x = "Year", y = "KBTU", title = "Mountain View Commerical Gas Heating Annual Energy Usage per job \nnormalized, 2013 to 2019")
+```
+
+In the plot below, the residential electricity cooling annual energy usage per resident (KBTU) is plotted. The values are also fairly consistent over the years, hovering around 50 KBTU. Note that these values are lower than the the residential electricity heating annual energy usage per resident (KBTU) because this area has a greater number of heating degree days than cooling degree days. 
+
+```{r}
+mtvw_pge_data_elec <-
+  mtvw_pge_data %>%
+  filter(ENERGYTYPE == "E") %>%
+  select(YEAR, CUSTOMERCLASS, TOTALKBTU)
+
+
+
+#residential electricity (KBTU/resident/CDD)
+mtvw_pge_data_elec_resd <-
+  mtvw_pge_data_elec %>%
+  filter(CUSTOMERCLASS == "Elec- Residential") %>%
+  select(YEAR, TOTALKBTU) %>%
+  cbind(cdd) %>%
+  select(-year) %>%
+  rename(cdd = `CanESM2 (Average)`)
+
+
+ggplot(
+  mtvw_pge_data_elec_resd, 
+  aes(
+    x = as.factor(YEAR), 
+    y = (TOTALKBTU/pop)/cdd
+  )
+) + 
+  geom_bar(stat = "identity", position = "dodge", fill = "blue") + 
+  labs(x = "Year", y = "KBTU", title = "Mountain View Residential Electricity Cooling Annual Energy Usage per resident \nnormalized, 2013 to 2019")
+```
+
+Lastly we plot the commercial electricity cooling annual energy usage per job (KBTU). The values are again lower than the residential electricity cooling energy usage per person, but are definitely higher than the commercial gas heating annual energy usage per job. This could be due to the fact that commercial buildings generally require more cooling than heating, but also could point to the needs of a tech campus where machinery and computers require even greater cooling efforts.
+
+```{r}
+#commercial electricity (KBTU/job/CDD)
+mtvw_pge_data_elec_comm <-
+  mtvw_pge_data_elec %>%
+  filter(CUSTOMERCLASS == "Elec- Commercial") %>%
+  select(YEAR, TOTALKBTU) %>%
+  cbind(cdd) %>%
+  select(-year) %>%
+  rename(cdd = `CanESM2 (Average)`) %>%
+  cbind(lodes_wac_clean) %>%
+  select(-year)
+  
+ggplot(
+  mtvw_pge_data_elec_comm, 
+  aes(
+    x = as.factor(YEAR), 
+    y = (TOTALKBTU/jobs)/cdd
+  )
+) + 
+  geom_bar(stat = "identity", position = "dodge", fill = "blue") + 
+  labs(x = "Year", y = "KBTU", title = "Mountain View Commerical Electricity Cooling Annual Energy Usage per job \nnormalized, 2013 to 2019")
+```
+
+Plotting total vehicle and building emissions, year-by-year (below), it is evident that the majority of emissions emanate from vehicle usage. This leads into the discussion of electric vehicles, and the potential they have to reduce emissions stemming from vehicle usage.
+
+```{r}
+#part 3 a
+# total vehicle and building emissions (keeping subcategories separate is fine), year-by-year.
+
+total_vehicle <- readRDS("total_vehicle.rds")
+
+total_ghg <-
+  mtvw_pge_data %>%
+  select(YEAR, TOTALTCO2E) %>%
+  ungroup() %>%
+  group_by(YEAR) %>%
+  rename(year = YEAR) %>%
+  summarise(ghg = sum(TOTALTCO2E)) %>%
+  mutate(type = "building") %>%
+  rbind(total_vehicle)
+  
+
+ggplot(
+  total_ghg, 
+  aes(
+    x = as.factor(year), 
+    y = ghg
+  )
+) + 
+  geom_bar(stat = "identity", aes(fill = type), position = "stack") + 
+  labs(x = "Year", y = "GHG Emissions", title = "Mountain View Annual GHG Emissions, 2013 to 2019")
+```
+
+<h3> Electric Vehicles </h3>
+
+
+While there are many underlying factors that could contribute to our overall GHG estimates, we were curious to understand electric vehicle's usage over the years, and if that played any part in reducing GHG emissions. 
+
+The dataset used (found at: https://www.energy.ca.gov/data-reports/energy-insights/zero-emission-vehicle-and-infrastructure-statistics/vehicle-population) includes types of vehicles on the road by zipcode broken down by year. After filtering for years 2013-2019 in our targeted zipcode, the following plot was obtained, showing that gasoline powered vehicles are (as expected) the greatest number of vehicle type over the years. 
+
+```{r}
+ca_vehicles <- read_xlsx("Vehicle Population_Last updated 04-30-2021.xlsx")
+
+mtvw_ev_vehicles <- ca_vehicles %>% 
+  filter(ZIP == "94043") %>% 
+  select(-ZIP) %>%
+  filter(`Data Year` %in% 2013:2019)
+
+
+ggplot(
+  mtvw_ev_vehicles, 
+  aes(
+    x = as.factor(`Data Year`), 
+    y = `Number of Vehicles`
+  )
+) + 
+  geom_bar(stat = "identity", aes(fill = `Fuel Type`), position = "dodge") + 
+  labs(x = "Year", y = "Number of Vehicles", title = "Mountain View Vehicles by fuel type, \n2013 to 2019")
+
+mtvw_chart <-
+  mtvw_ev_vehicles %>%
+  select(-`Fuel Type`) %>%
+  group_by(`Data Year`) %>%
+  summarise(`Number of Vehicles` = sum(`Number of Vehicles`)) %>%
+  mutate(
+    `Fuel Type` = "total"
+  )
+
+mtvw_ev_combined <-
+  mtvw_ev_vehicles %>%
+  rbind(mtvw_chart)
+```
+
+To better see the effect of electric vehicles specifically, a plot showing the proportion of electric vehicle to total vehicle types on the road was produced below.
+
+```{r}
+plot_filled_ev <-
+  mtvw_ev_combined %>% 
+  filter(`Fuel Type` %in% c("total", "Electric")) %>%
+    ggplot() +
+    geom_bar(
+      aes(
+        x = `Data Year` %>% factor(levels = rev(c("2013", "2014", "2015", "2016", "2017", "2018", "2019"))),
+        y = `Number of Vehicles`,
+        fill = `Fuel Type`
+      ),
+      stat = "identity",
+      position = "fill"
+    ) +
+    labs(
+      x = "Year",
+      y = "Proportion of Vehicles by Type",
+      title = "Mountain View vehicle type distribution by fuel type, \nEV vs total",
+      fill = "Fuel Type"
+    ) +
+    coord_flip() +
+    theme(
+      legend.position = "bottom",
+      legend.direction = "vertical"
+    )  +
+    guides(
+      fill = guide_legend(
+        reverse = T
+      )
+    )
+
+plot_filled_ev
+```
+
+This plot shows that electric vehicles have been increasing from 2013 to 2019 in Mountain View. While they still do not comprise a significant amount of the total vehicles on the road, this positive growth shows creates a promising basis for which to predict future trends. As gasoline prices increase and climate change becomes more pressing, it seems as though electric vehicles will emerge as a larger and larger market over the coming years. If this trend continues, this will hopefully reduce the transportation GHG footprint in this zipcode. 
+
+We can compare these values with the total annual vehicle emissions in Mountain View. 
+
+
+```{r}
+ggplot(
+  total_vehicle, 
+  aes(
+    x = as.factor(year), 
+    y = ghg
+  )
+) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  labs(x = "Year", y = "GHG Emissions", title = "Mountain View Annual Vehicle GHG \nEmissions, 2013 to 2019")
+```
+
+There is a slight decrease in emissions in 2019, but a greater sample size of electric vehicles is necessary in order to draw any concrete conclusions from these data sets. 
+
+It would be interesting to see data from 2020-2022 to examine how the pandemic has affected transportation data and even building data (ie if buildings were only operating at half capacity, or even none at all if work shifted to fully remote). With this new age of remote work, this likely will drive down transportation GHGs from commute trips.
+
+
+<h3> Analysis & Conclusions </h3>
+
+In consideration of the allocation of GHG footprint between manufacturers, consumers and other players, we believe that the onus should be on the producers of goods to internalize the negative externalities of their GHG emissions.
+
+For essentially every market, the responsibility to reduce consumption and thus GHG emissions has been placed solely on the consumer. While there are ways to reduce said footprint, such as taking specialized items to recycling plants or trying to coordinate carpooling, these actions are often difficult for the individual to implement in everyday life and do not achieve the highest level of overall impact that could be accomplished by a manufacturer-driven initiative.
+
+This model of responsibility falling on the consumer is incorrect, in my opinion. Further, the task of recycling products from corporations should not be placed on cities either, which are struggling with the volume of materials sent to be recycled. In an ideal world, this responsibility falls on the manufacturer, who has mechanisms in place for cohesive recycling or reuse of their own products. 
+
+There have already been initiatives to return this responsibility to the manufacturer. For example, the extended producer responsibility doctrine California has continued to follow in many sustainability-related policy initiatives, such as the plastic ban.
+
+A solution to allocating GHG burden should follow in the vein of restricting consumer options so that their only choices are "environmentally friendly." The resources that consumers have are minuscule compared to that of businesses and governments. By making the sustainable option the path of "least resistance", companies can make it much easier for consumers to reduce their own GHG footprints, and thus the overall footprint of the community. The central theme here is that corporations need to center sustainability in order to meet the needs of the planet and people more effectively.
+
+Whether that be having a strong carpooling system, having EV charging stations at the office parking lot (or offering more remote/hybrid work), or having higher incentives for recycling, companies need to make it easier for individuals to make choices that produce the least GHGs and have the least impact on the environment.
+
+
+
+(This assignment was completed in partnership with Daphne Jacobsberg and Catherine Beck)
+
+<br>
