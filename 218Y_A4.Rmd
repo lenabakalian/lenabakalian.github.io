@@ -1,0 +1,904 @@
+---
+title: "218Y Assignment 4: Sea Level Hazard in Redwood City, CA"
+author: "Lena Bakalian"
+date: "2/29/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+```
+
+
+```{r}
+library(raster)
+library(stars)
+library(remotes)
+library(tidyverse)
+library(sf)
+library(leaflet)
+library(mapboxapi)
+library(tigris)
+library(jsonlite)
+library(esri2sf)
+library(mapview)
+library(mapboxapi)
+library(plotly)
+library(censusapi)
+library(knitr)
+```
+
+
+<h3>Part 1: Measuring Sea Level Rise Over Time </h3> 
+
+Redwood City, adjacent to East Palo Alto, Palo Alto, and Foster City, has a large portion of its boundary on the coast. With climate change intensifying, we wondered what the implications of sea level rise would be on this more vulnerable area. 
+
+
+<br> Map of Redwood City's Boundaries <br>
+```{r}
+ca_cbgs <- block_groups("CA", cb = T, progress_bar = F)
+
+rdwd_boundary <- places("CA", cb = T, progress_bar = F) %>% 
+  filter(NAME == "Redwood City") 
+
+rdwd_cbgs_map <- 
+  ca_cbgs %>% 
+  st_centroid() %>% 
+  .[rdwd_boundary, ] %>% 
+  st_drop_geometry() %>% 
+  left_join(ca_cbgs %>% select(GEOID)) %>% 
+  st_as_sf()
+
+#Map Redwood City 
+leaflet() %>% 
+  addMapboxTiles(
+    style_id = "streets-v11",
+    username = "mapbox"
+  ) %>% 
+  addPolygons(
+    data = rdwd_cbgs_map,
+    fill = F
+  )
+
+#filter by cbgs with greatest A_Water
+rdwd_cbgs <-
+  ca_cbgs %>%
+  st_centroid() %>%
+  .[rdwd_boundary, ] %>%
+  st_drop_geometry() %>%
+  left_join(ca_cbgs %>% select(GEOID)) %>%
+  filter(GEOID %in% c("060816103021", "060816103032", "060816103034")) %>%
+  st_as_sf()
+```
+
+
+```{r}
+slr <- 25 #base level of sea level rise (25cm example)
+rp <- 20 #return period (return period of 20)
+
+#thus 1/20 = 5% chance
+
+path <- paste0("/Volumes/GoogleDrive/Shared drives/SFBI/Data Library/OCOF/san_mateo_flooding_slr",str_pad(slr, 3, "left", "0"),"/flooding/v2.1/county_san_mateo_flddepth_slr",str_pad(slr, 3, "left", "0"),"_w",str_pad(rp, 3, "left", "0"),".tif")
+
+test_flood <- raster(path)
+
+test_flood_rdwd <- test_flood %>%
+  crop(
+    rdwd_cbgs %>%
+      st_transform(26910) %>%
+      st_bbox()
+  )
+
+# test_flood_rdwd <- saveRDS(test_flood_rdwd, "test_flood_rdwd.rds")
+# test_flood_rdwd <- readRDS("test_flood_rdwd.rds")
+
+#st_crs(test_flood) to check last number to see coordinate system you want
+```
+
+
+```{r}
+# plot(test_flood_rdwd)
+```
+
+<br> In the image below, we can see a map of a portion of the Redwood City flood basin. <br> 
+```{r}
+flood_pal <- colorNumeric(
+  palette = "Blues",
+  domain = values(test_flood_rdwd), #values of the raster (every pixel of the values)
+  na.color = "transparent" #blanks are transparent
+)
+
+test_flood_rdwd_raster <- test_flood %>%
+  crop(
+    rdwd_cbgs %>%
+    filter(GEOID == "060816103032") %>%
+      st_transform(26910) %>%
+      st_bbox()
+  )
+
+leaflet() %>%
+  addMapboxTiles(
+    style_id = "satellite-streets-v11",
+    username = "mapbox",
+    options = tileOptions(opacity = 0.5)
+  ) %>%
+  addRasterImage(
+    test_flood_rdwd_raster,
+    colors = flood_pal
+  ) %>%
+  addLegend(
+    pal = flood_pal,
+    values = values(test_flood_rdwd_raster),
+    title = "Flood depth, cm"
+  )
+```
+
+Next, we processed flood maps for nine hazard scenarios collected from OCOF, cropped to the extent of the Redwood City cbgs under consideration. These hazard scenarios consisted of sea level rise of 0cm, 25cm and 50cm, and then return periods of 1 year, 20 years, and 100 years. All combinations of these factors resulted in nine hazard scenarios.
+
+```{r}
+#Process flood maps for at least the 9 hazard scenarios we collected in Section 5.1 from OCOF, cropped to the extent of the Redwood cbgs under consideration
+
+# for(slr in c("000","025","050")){ #sea level rise options
+#   
+#   for(rp in c("001","020","100")){ #return periods
+#     
+#     print(paste0("SLR",slr,"_RP",rp))
+#     
+#     path <-  paste0("/Volumes/GoogleDrive/Shared drives/SFBI/Data Library/OCOF/san_mateo_flooding_slr", str_pad(slr, 3, "left","0" ),"/flooding/v2.1/county_san_mateo_flddepth_slr",str_pad(slr, 3, "left", "0"),"_w",str_pad(rp, 3, "left", "0"),".tif")
+#     
+#     #path <- paste0("san_mateo_flooding_slr",slr,"/flooding/v2.1/county_san_mateo_flddepth_slr",slr,"_w",rp,".tif")
+#     
+#     flood <- raster(path) %>%  
+#       crop(
+#         rdwd_cbgs %>% 
+#           st_transform(26910) %>% 
+#           st_bbox()
+#       )
+#     
+#     writeRaster(flood, paste0("flood/SLR",slr,"_RP",rp,"_rdwd_flood.tif"), overwrite = T)
+#     
+#   }
+# }
+```
+
+```{r}
+# osm_bldg <- st_read("/Volumes/GoogleDrive/Shared drives/SFBI/Data Library/OSM/gis_osm_buildings_a_free_1.shp")
+# 
+# osm_bldg <- saveRDS(osm_bldg, "osm_bldg.rds")
+osm_bldg <- readRDS("osm_bldg.rds")
+
+# rdwd_cbgs <- rdwd_cbgs %>%
+# st_transform(4326)
+# 
+# rdwd_cbg_bldg <- osm_bldg[rdwd_cbgs, ]
+# 
+# rdwd_cbg_bldg <- saveRDS(rdwd_cbg_bldg, "rdwd_cbg_bldg.rds")
+rdwd_cbg_bldg <- readRDS("rdwd_cbg_bldg.rds")
+```
+
+<h3> Part 2:  Vehicle Exposure in Redwood City </h3> 
+
+In order to examine vehicle exposure, we began by calculating the maximum flood event (sea level rise of 50cm with a return period of 100 years). 
+```{r}
+#Flood potential 
+
+flood_max <-
+   raster("flood/SLR050_RP100_rdwd_flood.tif")
+
+# #flood_max <- test_flood_rdwd to create a temp file
+# flood_max_extent <-
+#   flood_max %>%
+#   st_as_stars() %>%
+#   mutate(SLR050_RP100_rdwd_flood = ifelse(
+#     !is.na(SLR050_RP100_rdwd_flood),
+#     1,
+#     NA
+#   )) %>%
+#   st_as_sf(merge = T) %>%
+#   st_set_crs(26910) %>% #lat long coords + depth
+#   st_make_valid() %>%
+#   st_transform(4326)
+# 
+# rdwd_bldg_flooded_max <-
+#   rdwd_cbg_bldg %>%
+#   st_transform(4326) %>%
+#   .[flood_max_extent,]
+
+# rdwd_bldg_flooded_max <- saveRDS(rdwd_bldg_flooded_max, "rdwd_bldg_flooded_max.rds")
+
+rdwd_bldg_flooded_max <- readRDS("rdwd_bldg_flooded_max.rds")
+```
+
+```{r}
+# flood_pal <- colorNumeric(
+#   palette = "Blues",
+#   domain = values(flood_max),
+#   na.color = "transparent"
+# )
+# 
+# leaflet() %>%
+#   addMapboxTiles(
+#     style_id = "satellite-streets-v11",
+#     username = "mapbox",
+#     options = tileOptions(opacity = 0.5)
+#   ) %>%
+#   addRasterImage(
+#     flood_max,
+#     colors = flood_pal,
+#     opacity = 0.75
+#   ) %>%
+#   addPolygons(
+#     data = rdwd_bldg_flooded_max,
+#     fill = F,
+#     color = "red",
+#     weight = 0.5
+#   ) %>%
+#   addLegend(
+#     pal = flood_pal,
+#     values = values(flood_max),
+#     title = "Flood depth, cm"
+#   )
+```
+
+Next, we calculated the building exposure for Redwood City. Our assumption is that vehicle exposure will be the same as building exposure since vehicles are usually parked next to buildings. 
+```{r}
+# rdwd_bldg_exposure <- NULL
+# 
+# for(slr in c("000","025","050")){
+# 
+#   for(rp in c("001","020","100")){
+# 
+#     print(paste0("SLR",slr,"_RP",rp))
+# 
+#     flood <- raster( paste0("flood/SLR",slr,"_RP",rp,"_rdwd_flood.tif"))
+# 
+#     flood_extent <-
+#       (flood > -Inf) %>%
+#       st_as_stars() %>%
+#       st_as_sf(merge = T) %>%
+#       st_set_crs(26910) %>%
+#       st_make_valid() %>%
+#       st_transform(4326)
+# 
+#     rdwd_bldg_flooded <-
+#       rdwd_bldg_flooded_max[flood_extent,] %>%
+#       st_transform(26910)
+# 
+#     flood_crop <-
+#       crop(flood, rdwd_bldg_flooded)
+# 
+#     flood_crop[is.na(flood_crop)] <- 0
+# 
+#     temp <-
+#       raster::extract(
+#         flood_crop,
+#         rdwd_bldg_flooded,
+#         fun = mean
+#       ) %>%
+#       as.data.frame() %>%
+#       rename(avg_depth = V1) %>%
+#       cbind(
+#         rdwd_bldg_flooded %>%
+#           st_drop_geometry() %>%
+#           dplyr::select(osm_id)
+#       ) %>%
+#       mutate(
+#         SLR = slr,
+#         RP = rp
+#       )
+# 
+#     rdwd_bldg_exposure <-
+#       rdwd_bldg_exposure %>%
+#       rbind(temp)
+# 
+#   }
+# }
+# saveRDS(rdwd_bldg_exposure,"rdwd_bldg_exposure.rds")
+rdwd_bldg_exposure <- readRDS("rdwd_bldg_exposure.rds") ##turn average depth into values currency 
+```
+
+We then used EMFAC to collect vehicle counts in San Mateo County (where Redwood City is located) for the years 2020, 2030, 2040, and 2050. 
+
+This served as an estimate of the percent increase in vehicles decade by decade. We then collected the latest available (2019) ACS 5-yr data about vehicle ownership and population in our specific Redwood City CBGs in order to produce an estimate of the total number of owned vehicles.
+
+This is what was used for 2020, to be scaled to 2030 and on using the EMFAC percentages. We are making the assumption here that the percent vehicle ownership rate doesn’t change over the next 30 years. 
+
+```{r}
+#Loading in EMFAC data for 2020, 2030, 2040, 2050
+
+emfac <- read_csv("EMFAC2021-EI-202xClass-SanMateo2020-2030-2040-2050-Annual-20220214202738.csv", skip = 8)
+
+future_vehicle_count <- 
+  emfac %>%
+  dplyr::select(
+    year = `Calendar Year`,
+    count = Population
+  ) %>%
+  group_by(year) %>%
+  summarize(count = sum(count)) %>%
+  mutate(
+    perc = count/min(count)
+  )
+
+```
+
+```{r}
+##get census data for number of vehicles in a block group 
+rdwd_cbg <- block_groups("CA","San Mateo", cb = F, progress_bar = F, year = 2019) %>% 
+  filter(GEOID %in% c("060816103021", "060816103032", "060816103034")) %>% 
+  st_transform(4326)
+
+rdwd_bldgs <- readRDS("rdwd_cbg_bldg.rds") %>% 
+  .[rdwd_cbg,]
+
+# rdwd_blocks <-
+#    blocks("CA","San Mateo", progress_bar = F, year = 2020)
+# saveRDS(rdwd_blocks, "rdwd_blocks.rds")
+
+rdwd_blocks <-
+  readRDS("rdwd_blocks.rds") %>% 
+  st_transform(4326) %>% 
+  .[rdwd_bldgs,]
+
+acs_vars_2019_5yr <- readRDS("acs_vars_2019_5yr.rds")
+
+rdwd_blocks_pop <-
+  getCensus(
+    name = "dec/pl",
+    vintage = 2020,
+    region = "block:*", 
+    regionin = "state:06+county:081",
+    vars = "P1_001N" #population data
+  ) %>% 
+  transmute(
+    GEOID20 = paste0(state,county,tract,block),
+    pop = P1_001N
+  ) %>% 
+  filter(GEOID20 %in% rdwd_blocks$GEOID20)
+
+rdwd_bg_vehicle <-
+  getCensus(
+    name = "acs/acs5",
+    vintage = 2019,
+    region = "block group:*",
+    regionin = "state:06+county:081",
+    vars = "group(B25044)" ##vehicle ownership 
+  ) %>% 
+  mutate(
+    cbg =
+      paste0(state,county,tract,block_group)
+  ) %>% 
+  dplyr::select(!c(GEO_ID,state,county,tract,block_group,NAME) & !ends_with(c("EA","MA","M"))) %>%
+  pivot_longer(
+    ends_with("E"),
+    names_to = "variable",
+    values_to = "estimate"
+  ) %>%
+  left_join(
+    acs_vars_2019_5yr %>% 
+      dplyr::select(name, label), 
+    by = c("variable" = "name")
+  ) %>% 
+  dplyr::select(-variable) %>% 
+  separate(
+    label,
+    into = c(NA,NA,"tenure", "vehicle"),
+    sep = "!!"
+  ) %>% 
+  filter(!is.na(vehicle)) %>% 
+  filter(cbg %in% rdwd_cbg$GEOID) ##filter by the cbg group 
+
+#out of total households, 81 households had no vehicles in 2020
+#out of total households, 919 households had one vehicle in 2020
+
+##Find total number of vehicles in our study cbgs
+rdwd_bg_vehicle_total <- rdwd_bg_vehicle %>% 
+  filter(vehicle != "No vehicle available") %>% 
+  mutate(
+    vehicle = substr(vehicle, 1,1) %>% as.numeric(),
+    vehicle_count = vehicle * estimate
+  ) %>% 
+  group_by(cbg) %>% 
+  summarize(vehicle_count = sum(vehicle_count))
+```
+Out of total households, 81 households did not have any vehicles available in 2020. 919 of them had one vehicle. 
+
+The vehicle projection for the Redwood City cbgs for the years 2030, 2040 and 2050 are portrayed in the table below, including a breakdown of households with one vehicle vs zero vehicles.
+
+```{r}
+#number of vehicles per year 
+rdwd_veh_projection <- rdwd_bg_vehicle_total %>%
+  summarize(vehicle_count = sum(vehicle_count)) %>% ##add up all the vehicle counts in our cbg area 
+  cbind(future_vehicle_count) %>%
+  select(-count) %>%
+  mutate(
+   vehicle_count = vehicle_count *perc
+  )  %>%
+  mutate(
+    no_vehicles = 81 * perc
+  ) %>%
+  mutate(
+    one_vehicle = 919* perc
+  ) %>%
+  select(-perc)
+
+knitr::kable(rdwd_veh_projection)
+
+```
+
+<br> 
+We are assuming that each city in San Mateo is increasing vehicle count by the same amount each decade. Thus, we are able to use EMFAC data to determine how many vehicles there will be in our flood risk zone between 2020-2050. 
+
+Based on this vehicle projection, in 2020 there is expected to be around 5,600 cars, in 2030 there is expected to be about 8,000 vehicles, in 2030 there is expected be 9,500 cars, and in 2050 there is expected to be around 10,100 vehicles. 
+
+Households with no vehicles in our study area are also projected to increase by the same percentage, as are households with one vehicle. The number of households with no vehicle is consistently less than those with one vehicle over this timeframe.
+
+When determining flood risk for these vehicles, it is important to remember that we are using household flood risk as our test, so it will look like there is little to no risk for those households with 1/0 vehicles. Obviously, this is not the case, however, this particular model is looking at vehicle-related flood damage and thus cannot capture accurately the damage incurred by households. Households with no vehicles might merely live closer to public transportation hubs, or might not be able to afford a vehicle. If the latter is the case, this group would be even more vulnerable to monetary damages caused by sea level rise, per the assumption we made about vehicle flood risk being the same as building flood risk. 
+
+<br>
+
+
+
+<h3> Part 3: Vehicles per Building </h3> 
+```{r}
+rdwd_block_veh_per_bldg <-
+  rdwd_bldgs %>% 
+  filter(type %in% c("house", "apartments", "detached", "residential", NA)) %>% # any non-residential buildings?
+  select(osm_id) %>% # unique ID for each building
+  st_centroid() %>% 
+  st_join(rdwd_blocks %>% select(GEOID20)) %>% # block shapes
+  st_join(rdwd_cbg %>% select(cbg = GEOID)) %>% # cbg shapes
+  st_drop_geometry() %>% 
+  group_by(GEOID20, cbg) %>% # "assuming population is distributed evenly across buildings in a block"
+  summarize(bldg_count = n()) %>% # how to get counts? add up all the unique building codes
+  left_join(rdwd_blocks_pop) %>% # census dataset
+  left_join(rdwd_bg_vehicle_total) %>% # census dataset
+  group_by(cbg) %>% # "and vehicles are distributed evenly across population"
+  mutate(
+    veh_per_person = vehicle_count/sum(pop),
+    ppl_per_bldg = pop/bldg_count,
+    veh_per_bldg = veh_per_person*ppl_per_bldg # fractional result ok
+  )
+
+# saveRDS(rdwd_block_veh_per_bldg, "rdwd_block_veh_per_bldg.rds")
+
+# dataset with individual buildings, vehicle counts for each building
+rdwd_veh_per_bldg <- rdwd_bldgs %>% 
+  filter(!is.na(type)) %>% 
+  select(osm_id) %>% 
+  st_centroid() %>% 
+  st_join(rdwd_blocks %>% select(GEOID20)) %>% 
+  left_join(rdwd_block_veh_per_bldg %>% select(GEOID20, veh_per_bldg))
+```
+
+
+After using 2020 Decennial census data to calculate the total population in each block, we used OpenStreetMap data to retrieve all residential building footprints within these blocks. Assuming population is distributed evenly across buildings in a block, and vehicles are distributed evenly across population, 2020 vehicles were allocated from the whole CBG to each building. 
+
+
+<h3> Part 4: Vulnerability Data </h3> 
+
+Here, we estimate percent vehicle damage for individual vehicles using vulnerability data from the US Army Corps of Engineers (https://planning.erdc.dren.mil/toolbox/library/EGMs/egm09-04.pdf).
+```{r}
+vulnerability <- data.frame(
+  depth = c(0,0.5,1,2,3,4,5,6,7,8,9,10),
+  perc_damage = c(
+    0,
+    0.076,
+    0.28,
+    0.462,
+    0.622,
+    0.76,
+    0.876,
+    0.97,
+    1,
+    1,
+    1,
+    1
+  )
+)
+
+
+rdwd_vehicle_exposure <- 
+  readRDS("rdwd_bldg_exposure.rds") %>% 
+  mutate(
+    avg_depth = avg_depth*0.0328084 # cm to ft
+  )
+
+rdwd_vehicle_perc_damage <- 
+  approx(
+    x = vulnerability$depth,
+    y = vulnerability$perc_damage,
+    xout = rdwd_vehicle_exposure$avg_depth
+  ) %>% 
+  .[2] %>% 
+  as.data.frame() %>% 
+  rename(perc_damage = y) %>% 
+  cbind(rdwd_vehicle_exposure)
+
+# saveRDS(rdwd_vehicle_perc_damage,"rdwd_vehicle_perc_damage.rds")
+```
+
+<br> Building damage is used as a proxy for vehicle damage by assuming that street level or basement flooding would affect cars as well as houses.  <br> 
+
+```{r}
+##Plot the vehicle damage
+rdwd_vehicle_perc_damage_plot <- 
+  expand.grid(
+    osm_id = unique(rdwd_vehicle_perc_damage$osm_id),
+    SLR = unique(rdwd_vehicle_perc_damage$SLR),
+    RP = unique(rdwd_vehicle_perc_damage$RP)
+  ) %>% 
+  left_join(rdwd_vehicle_perc_damage) %>% 
+  mutate(
+    avg_depth = ifelse(
+      is.na(avg_depth),
+      0,
+      avg_depth
+    )
+  )
+
+rdwd_plot <- 
+  plot_ly() %>% 
+  add_trace(
+    data = 
+      rdwd_vehicle_perc_damage_plot %>% 
+        filter(RP == "100") %>% 
+        mutate(SLR = SLR %>% as.numeric()),
+    x = ~avg_depth,
+    y = ~perc_damage,
+    frame = ~SLR,
+    type = 'scatter',
+    mode = 'markers',
+    marker = list(
+      color = 'rgba(17, 157, 255, 0.01)',
+      size = 15
+    ),
+    showlegend = F
+  ) %>% 
+  add_trace(
+    data = vulnerability,
+    x = ~depth,
+    y = ~perc_damage,
+    type = 'scatter',
+    mode = 'markers',
+    marker = list(
+      color = 'rgb(0,0,0)'
+    ),
+    showlegend = F
+  ) %>% 
+  layout(
+    xaxis = list(
+      title = "Average Flood Depth",
+      zeroline = FALSE
+    ),
+    yaxis = list(
+      title = "Percent Damage"
+    ),
+    title = "Redwood City vehicle damage during<br>100-year storm, by base sea level rise"
+  ) %>% 
+  config(displayModeBar = F)
+
+rdwd_plot
+```
+
+The more flood depth, the greater the vehicle flood damage as can be seen in this plot. 
+
+
+<h3> Part 5: Average Annualized Cost of Floods </h3> 
+
+<br> Risk Estimation <br>
+
+From the New York Times (https://www.nytimes.com/2021/03/25/business/car-paint-job-resale-value.html), the average resale value of a sedan in 2020 was $24,112, which was our vehicle cost assumption. This number was then multiplied by the percentage of respondents who would not move their vehicles with warning greater than 12 hours (11.9%), a value from the Army Corps of Engineers. These values were then multiplied by the damage percentage.
+
+
+
+```{r}
+projection <- "+proj=utm +zone=10 +ellps=GRS80 +datum=NAD83 +units=ft +no_defs"
+
+#the vehicle flooded max is the same as the building flooded max in our assumptions
+rdwd_vehicle_flooded_max <- 
+  readRDS("rdwd_bldg_flooded_max.rds") %>% 
+  st_transform(projection) %>% 
+  mutate(
+    area = st_area(.) %>% as.numeric()
+  )
+
+rdwd_vehicle_perc_damage <- readRDS("rdwd_vehicle_perc_damage.rds")
+  
+rdwd_vehicle_damage <-
+  rdwd_vehicle_perc_damage %>% 
+  left_join(
+    rdwd_veh_per_bldg %>% 
+      st_drop_geometry() %>% 
+      select(osm_id, veh_per_bldg)
+  ) %>% 
+  filter(!is.na(veh_per_bldg)) %>%
+  mutate(
+    damage = veh_per_bldg * 0.119 * 24112* perc_damage #from NYT, average cost of a car in 2020 ($24,112) multiplied by the percentage of respondents who did not move vehicles with warning greater than 12 hours
+  ) %>% 
+  select(osm_id, SLR, RP, damage) 
+
+# head(rdwd_vehicle_damage) ##$$ damage for each vehicle, for each event
+```
+
+<br>
+This output of vehicle damage in Redwood City shows that OSM 233058123 has the highest $ damage risk, with a value of $18,676.
+
+<br>
+Now we have “$ damage” for each vehicle, for each event. We can now combine each trio of storm events together (for each of 5 levels of sea level rise). The result will be an “average annualized loss” for each vehicle for 5 different hypothetical years, each of which has a different base sea level rise.
+
+```{r}
+rdwd_vehicle_aal_by_slr <-
+  rdwd_vehicle_damage %>% 
+  pivot_wider(
+    names_from = RP,
+    values_from = damage
+  ) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(
+    damage = 
+      0.95*(`001`+`020`)/2 + 
+      0.04*(`020`+`100`)/2 + 
+      0.01*(`100`)
+  ) %>% 
+  select(osm_id, SLR, damage)
+
+# head(rdwd_vehicle_aal_by_slr)
+
+#assigned a dollar value associated with the damage like the table shows to each osm_id aka individual building
+```
+<br> The output of vehicle average annualized loss by sea level rise in Redwood City shows that OSM 233058123 has the highest average annualized loss related to flood risk, with a value of $19,337.
+
+<br> 
+
+Next, we estimate average annualized loss, in $ vehicle damages, over 2020-2050, using RCP 4.5 occurrence rates of sea level rise in the Bay Area across years. 
+
+<br>
+
+```{r}
+#flood risk projected out
+
+rcp45 <- read_csv("https://raw.githubusercontent.com/stanfordfuturebay/stanfordfuturebay.github.io/master/advanced/rcp45_sanfrancisco.csv")
+
+knitr::kable(rcp45)
+```
+
+
+```{r}
+rdwd_vehicle_aal_by_year <- 
+  rdwd_vehicle_aal_by_slr %>% 
+  left_join(
+    rcp45 %>% 
+      mutate(
+        SLR = str_pad(SLR, 3 , "left", "0")
+      ) %>% 
+      select(
+        SLR,
+        `2020`,
+        `2030`,
+        `2040`,
+        `2050`
+      )
+  ) %>% 
+  pivot_longer(
+    `2020`:`2050`,
+    names_to = "year",
+    values_to = "occurrence"
+  ) %>% 
+  pivot_longer(
+    c(damage,occurrence),
+    names_to = "key",
+    values_to = "value"
+  ) %>% 
+  pivot_wider(
+    names_from = c("key","SLR"),
+    values_from = value
+  ) %>% 
+  replace(is.na(.), 0) %>% 
+  mutate(
+    damage = 
+      occurrence_000 * (damage_000 + damage_025)/2 + 
+      occurrence_025 * (damage_025 + damage_050)/2 + 
+      occurrence_050 * (damage_050)
+  ) %>% 
+  select(osm_id, year, damage)
+
+# head(rdwd_vehicle_aal_by_year)
+
+##bldg footprint is the proxy for the vehicles at street level and garage 
+```
+<br> 
+Now we have projected flood risk between 2020-2050 and its associated $ damage. It seems like 2020 and 2030 are going to be the most costly years with their associated osm_id's. <br>
+
+The total average annualized loss for all of our study areas in Redwood City is presented in the table below for each year:
+
+```{r}
+##Final AALs in Our Study Period
+
+total_aal <- rdwd_vehicle_aal_by_year %>%
+  group_by(year) %>%
+  summarize(damage = sum(damage))
+
+knitr::kable(total_aal)
+```
+<br> The damage increases exponentially each decade. <br>
+
+```{r}
+#projected flood risk between 2020 and 2050 and its associated $ damage. 2020 and 2030 are going to be the most costly years with their associated osm_ids.
+
+rdwd_vehicle_aal_by_year_map <-
+  rdwd_vehicle_aal_by_year %>% 
+  pivot_wider(
+    names_from = year,
+    values_from = damage
+  ) %>% 
+  mutate(
+    change = `2050`-`2020`
+  ) %>% 
+  left_join(
+    rdwd_vehicle_flooded_max %>%
+      select(osm_id)
+  ) %>% 
+  st_as_sf() %>% 
+  st_transform(4326)
+
+aal_pal <- colorNumeric(
+  palette = "Reds",
+  domain = c(0,rdwd_vehicle_aal_by_year_map$`2050`)
+)
+
+rdwd_vehicle_aal_by_year_map %>% 
+  leaflet() %>% 
+  addMapboxTiles(
+    style_id = "light-v9",
+    username = "mapbox"
+  ) %>% 
+  addPolygons(
+    fillColor = ~aal_pal(`2020`),
+    color = "gray",
+    fillOpacity = 1,
+    opacity = 1,
+    weight = 0.25,
+    highlightOptions = highlightOptions(
+      color = "white",
+      weight = 2
+    ),
+    label = ~paste0("$",prettyNum(signif(`2020`,2),",")," average annualized loss in 2020"),
+    group = "2020"
+  ) %>% 
+  addPolygons(
+    fillColor = ~aal_pal(`2050`),
+    color = "gray",
+    fillOpacity = 1,
+    opacity = 1,
+    weight = 0.25,
+    highlightOptions = highlightOptions(
+      color = "white",
+      weight = 2
+    ),
+    label = ~paste0("$",prettyNum(signif(`2050`,2),",")," average annualized loss in 2050"),
+    group = "2050"
+  ) %>% 
+  addPolygons(
+    fillColor = ~aal_pal(change),
+    color = "gray",
+    fillOpacity = 1,
+    opacity = 1,
+    weight = 0.25,
+    highlightOptions = highlightOptions(
+      color = "white",
+      weight = 2
+    ),
+    label = ~paste0("$",prettyNum(signif(change,2),",")," change in average annualized loss from 2020 to 2050"),
+    group = "Change"
+  ) %>% 
+  addLegend(
+    pal = aal_pal,
+    values = ~`2050`,
+    title = "AAL"
+  ) %>% 
+  addLayersControl(
+    baseGroups = c("2020","2050","Change"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>% 
+  showGroup("2050")
+```
+
+<br> 
+
+
+It is quite evident that there is a clear flood risk in this zone that is only exacerbated over the 2020-2050 timeframe (seen through toggling between 2020 and 2050 on the map). Overall, most locations have low flood risk in 2020, indicated by a pale red color, which becomes much greater when toggled to 2050, indicated by a darker red on the map. 
+
+The buildings and vehicles in the inlet close to the Bayshore Freeway are seemingly the most exposed in the study area, with some areas being bright red in the change between 2020 and 2050. The section with Satuma Dr in the center seems to be most at risk in 2050 with the greatest change between 2020 and 2050. The Redwood Shores Lagoon neighborhood is at serious risk of flood damage though none of the buildings seem to have as urgent or dire a flood risk as the Maple St neighborhood. There does seem to be a fair amount of buffer zone between the water and housing, which may be attributed to the fact that we did not include industrial use buildings. Perhaps if we did there would be greater red zones.
+
+Obviously there are many assumptions we made in our study and a lot of projection, but based on this analysis, Redwood City should act quickly to strengthen its climate change/sea level rise mitigation plans.<br> 
+
+
+Below, we have a table illustrating the average annualized loss for each of our three studied cbgs in Redwood City, over the 2020-2050 timeframe:
+
+```{r}
+rdwd_bg_aal <-
+  rdwd_vehicle_aal_by_year %>% 
+  pivot_wider(
+    names_from = year,
+    values_from = damage
+  ) %>% 
+  mutate(
+    aal = (`2020`*5 + `2030`*10 + `2040`*10 + `2050`*5)/30
+  ) %>% 
+  left_join(
+    rdwd_vehicle_flooded_max %>%
+      select(osm_id) %>% 
+      st_centroid()
+  ) %>% 
+  st_as_sf() %>% 
+  st_transform(4269) %>% 
+  st_join(rdwd_cbgs) %>% 
+  st_set_geometry(NULL) %>% 
+  group_by(GEOID) %>% 
+  summarize(
+    aal = sum(aal),
+    count = n()
+  ) %>% 
+  left_join(rdwd_cbgs) %>% 
+  st_as_sf()
+
+final_table <-
+  rdwd_bg_aal %>%
+  select(GEOID, aal) %>%
+  st_drop_geometry()
+
+knitr::kable(final_table)
+```
+It is clear that the cost of damage associated with increasing levels of sea rise are increasing as well.
+
+The sum value of all the average annualized loss across all our studied cbgs in Redwood City over the 2020-2050 timeframe:
+
+```{r}
+knitr::kable(sum(final_table$aal) %>% prettyNum(",") %>% paste0("$",.))
+```
+
+Below, the AAL across our block groups is plotted.
+
+```{r}
+aal_pal <- colorNumeric(
+  palette = "Reds",
+  domain = rdwd_bg_aal$aal
+)
+
+rdwd_bg_aal %>% 
+  leaflet() %>% 
+  addMapboxTiles(
+    style_id = "light-v9",
+    username = "mapbox"
+  ) %>% 
+  addPolygons(
+    fillColor = ~aal_pal(aal),
+    color = "gray",
+    fillOpacity = 0.5,
+    opacity = 1,
+    weight = 0.25,
+    highlightOptions = highlightOptions(
+      color = "white",
+      weight = 2
+    ),
+    label = ~paste0("$",prettyNum(signif(aal,2),",")," average annualized loss across ", count, " buildings, 2020-2050")
+  ) %>% 
+  addLegend(
+    pal = aal_pal,
+    values = ~aal,
+    title = "AAL, 2020-2050"
+  )
+```
+
+The darkest chunk has the greatest loss, the orange has slightly less loss, and the white chunk has the least amount of loss. However, the orange chunk has the greatest amount of buildings, followed by the darkest and then the white. This is likely due to the fact that the white chunk is the most inland versus the darkest chunk which is closest to the water and the canals. Waterfront properties generally are more expensive than inland ones so perhaps more people own more vehicles there, which would contribute to a greater AAL.
+
+We can see that even at the block level, there are large variations in locations of buildings relative to the coast. For example, in the largest block, buildings and vehicles close to the water will have drastically different outcomes than more inland locations. Thus, our results may not be granular enough to fully understand the placement of the buildings and their associated AALs. Future assessment might include more nuanced analysis.
+
+This analysis was a starting point to understand how sealevel rise will affect blocks within Redwood City, but further analysis should include cost of housing, housing tenancy, and the effects of average annualized loss on communities. It would be interesting to also better understand the demographics of this area and how that might play into specific vulnerabilities that become exacerbated with effects of climate change/sea level rise.
+
+
+
+
+
+(This assignment was completed in partnership with Daphne Jacobsberg and Catherine Beck)
