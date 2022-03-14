@@ -1,0 +1,13 @@
+name: A5_Shiny
+title: A5_Shiny
+username:
+account: lenabakalian
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 5845111
+bundleId: 5679511
+url: https://lenabakalian.shinyapps.io/A5_Shiny/
+when: 1647230529.8268
+lastSyncTime: 1647230529.82681
+asMultiple: FALSE
+asStatic: FALSE

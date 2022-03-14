@@ -1,0 +1,517 @@
+---
+title: "218Y_A5"
+author: "Lena Bakalian"
+date: "3/14/2022"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+```
+
+```{r}
+# library(tidyverse)
+# library(readxl)
+# library(tigris)
+# library(sf)
+# library(leaflet)
+# library(tidycensus)
+# library(censusapi)
+# library(mapview)
+# library(esri2sf)
+# library(plotly)
+# library(knitr)
+# library(mapboxapi)
+# library(stringr)
+# library(remotes)
+# library(jsonlite)
+
+#my key 44D319B5-9A53-11EC-B9BF-42010A800003
+```
+
+<h4> Part 1: Geographic Equity </h4>
+
+We examined outdoor air quality in East Palo Alto and Foster City (both in San Mateo county). We associated sensors with jurisdictions by filtering the sensors twice: once by county to get to San Mateo County only and then a second time with places() for each city (Foster City and East Palo Alto). <br>
+
+To view this data, we outputted a graph comparing PM 2.5 concentrations over time (February) for both jurisdictions as well as a map of the whole of San Mateo County and the air quality index (AQI) across the region. The timeline shows a similar trend for both Foster City and East Palo Alto. It is interesting to see that the almost cyclical nature of these graphs. There are about four peaks over the timeline, with three corresponding "lows". Upon initial reflection, these peaks occurred on mostly Saturdays and Sundays. A theory could be that with increased work-from-home, there is reduced travel during the weekdays and increased travel on weekends, potentially increasing the amount of PM2.5. Further analysis into this could be interesting.
+
+Looking at the AQI map, the number of sensors on the Bay-side are greater than those on the ocean-side of the County; since Foster City and East Palo Alto are on the Bay-side, this suggests that the data received is potentially more reliable than other areas. It seems like the 280 highway is the boundary between the area with more and fewer sensors. The map shows that our areas of interest had predominantly "good" or "moderate" air quality (though there were parts of San Mateo that had worse AQI scores).
+
+There seems to be two sensors with much higher AQIs than their surrounding sensors: one in Milbrae with a score of 25 and one outside of San Carlos with a score of 15. These could be due to error with the sensor itself or could be a real indication of an issue in these areas. These sensors should be investigated separately in future analysis to determine if these scores are accurately reflecting risk.
+
+```{r}
+# pa_api <- "44D319B5-9A53-11EC-B9BF-42010A800003"
+# 
+# json <- fromJSON(paste0(
+#     "https://api.purpleair.com/v1/sensors?api_key=",
+#     pa_api,
+#     "&fields=name,location_type,latitude,longitude,pm2.5_1week,temperature,humidity,primary_id_a,primary_key_a,secondary_id_a,secondary_key_a,primary_id_b,primary_key_b,secondary_id_b,secondary_key_b"
+#   ))
+# 
+# all_sensors <- json %>% 
+#   .$data %>% 
+#   as.data.frame() %>% 
+#   set_names(json$fields) %>% 
+#   filter(
+#     !is.na(longitude),
+#     !is.na(latitude)
+#   ) %>% 
+#   st_as_sf(coords = c("longitude","latitude"), crs = 4326) %>% 
+#   mutate(location_type = ifelse(
+#     location_type == 0,
+#     "outside",
+#     "inside"
+#   ))
+# 
+# smc_county <-
+#   counties("CA", cb = T, progress_bar = F) %>%
+#   filter(NAME == "San Mateo") %>%
+#   st_transform(4326)
+# 
+# smc_sensors <-
+#   all_sensors %>% 
+#   .[smc_county, ] #need to get bay counties
+```
+
+```{r}
+# smc_sensors_clean <- smc_sensors %>% 
+#   filter(
+#     !is.na(pm2.5_1week),
+#     !is.na(humidity)
+#   ) %>% 
+#   mutate(
+#     PM25 = 0.524*as.numeric(pm2.5_1week) - 0.0852*as.numeric(humidity) + 5.72,
+#     AQI = case_when(
+#       PM25 <= 12 ~ 
+#         paste(round(50/12*PM25), "Good"),
+#       PM25 <= 35.4 ~ 
+#         paste(round((100-51)/(35.4-12)*(PM25 - 12) + 51), "Moderate"),
+#       PM25 <= 55.4 ~
+#         paste(round((150-101)/(55.4-35.4)*(PM25 - 35.4) + 101), "Moderately Unhealthy"),
+#       PM25 <= 150.4 ~
+#         paste(round((200-151)/(150.4-55.4)*(PM25 - 55.4) + 151), "Unhealthy"),
+#       PM25 <= 250.4 ~
+#         paste(round((300-201)/(250.4-150.4)*(PM25 - 150.4) + 201), "Very Unhealthy"),
+#       TRUE ~ 
+#         paste(round((500-301)/(500.4-250.5)*(PM25 - 250.5) + 301), "Hazardous")
+#     )
+#   ) %>% 
+#   separate(
+#     AQI,
+#     into = c("AQI","AQI_Cat"),
+#     sep = " ",
+#     extra = "merge"
+#   ) %>% 
+#   mutate(
+#     AQI = as.numeric(AQI),
+#     AQI_Cat = AQI_Cat %>% factor(levels = c("Good", "Moderate","Moderately Unhealthy","Unhealthy","Very Unhealthy","Hazardous"))
+#   )
+```
+
+
+```{r}
+# epa_boundary <- places("CA", cb = T, progress_bar = F) %>%
+#   filter(NAME == "East Palo Alto") %>%
+#   st_transform(4326)
+# 
+# fc_boundary <- places("CA", cb = T, progress_bar = F) %>%
+#   filter(NAME == "Foster City") %>%
+#   st_transform(4326)
+# 
+# epa_sensors <- smc_sensors_clean %>%
+#   .[epa_boundary,]
+# 
+# fc_sensors <- smc_sensors_clean %>%
+#   .[fc_boundary,]
+# 
+# start <- "2022-02-01%2000:08:00"
+# end <- "2022-02-07%2000:08:00"
+# 
+# fc_sensor_data_wk1 <- 
+#   1:nrow(fc_sensors) %>% 
+#   map_dfr(function(row){
+#   
+#   print(paste0(row,". ",fc_sensors[row,]$sensor_index))
+#   
+#   a1 <- read_csv(paste0(
+#     "https://api.thingspeak.com/channels/",
+#     fc_sensors[row,]$primary_id_a,
+#     "/feeds.csv?api_key=",
+#     fc_sensors[row,]$primary_key_a,
+#     "&average=1440&round=3&start=",start,
+#     "&end=", end, 
+#     "&timezone=America/Los_Angeles"
+#   ), show_col_types = F) %>% 
+#     set_names(c("created_at","PM1.0_CF_1_ug/m3_A","PM2.5_CF_1_ug/m3_A","PM10.0_CF_1_ug/m3_A","Uptime_Minutes_A","RSSI_dbm_A","Temperature_F_A","Humidity_%_A","PM2.5_CF_ATM_ug/m3_A"))
+#       
+#   a2 <- read_csv(paste0(
+#     "https://api.thingspeak.com/channels/",
+#     fc_sensors[row,]$secondary_id_a,
+#     "/feeds.csv?api_key=",
+#     fc_sensors[row,]$secondary_key_a,
+#     "&average=1440&round=3&start=",start,
+#     "&end=", end, 
+#     "&timezone=America/Los_Angeles"
+#   ), show_col_types = F) %>% 
+#     set_names(c("created_at","0.3um/dl_A","0.5um/dl_A","1.0um/dl_A","2.5um/dl_A","5.0um/dl_A","10.0um/dl_A","PM1.0_CF_ATM_ug/m3_A","PM10_CF_ATM_ug/m3_A"))
+#     
+#   b1 <- read_csv(paste0(
+#     "https://api.thingspeak.com/channels/",
+#     fc_sensors[row,]$primary_id_b,
+#     "/feeds.csv?api_key=",
+#     fc_sensors[row,]$primary_key_b,
+#     "&average=1440&round=3&start=",start,
+#     "&end=", end, 
+#     "&timezone=America/Los_Angeles"
+#   ), show_col_types = F) %>% 
+#     set_names(c("created_at","PM1.0_CF_1_ug/m3_B","PM2.5_CF_1_ug/m3_B","PM10.0_CF_1_ug/m3_B","HEAP_B","ADC0_voltage_B","Atmos_Pres_B","Not_Used_B","PM2.5_CF_ATM_ug/m3_B"))
+#   
+#   b2 <- read_csv(paste0(
+#     "https://api.thingspeak.com/channels/",
+#     fc_sensors[row,]$secondary_id_b,
+#     "/feeds.csv?api_key=",
+#     fc_sensors[row,]$secondary_key_b,
+#     "&average=1440&round=3&start=",start,
+#     "&end=", end, 
+#     "&timezone=America/Los_Angeles"
+#   ), show_col_types = F) %>% 
+#     set_names(c("created_at","0.3um/dl_B","0.5um/dl_B","1.0um/dl_B","2.5um/dl_B","5.0um/dl_B","10.0um/dl_B","PM1.0_CF_ATM_ug/m3_B","PM10_CF_ATM_ug/m3_B"))
+#   
+#   combined <- a1 %>% 
+#     left_join(a2, by = "created_at") %>% 
+#     left_join(b1, by = "created_at") %>% 
+#     left_join(b2, by = "created_at") %>% 
+#     transmute(
+#       date = as.Date(created_at),
+#       ID = as.numeric(fc_sensors[row,]$sensor_index),
+#       Location = fc_sensors[row,]$location_type,
+#       PM25 = 0.524*as.numeric(`PM2.5_CF_1_ug/m3_A`) - 0.0852*as.numeric(`Humidity_%_A`) + 5.72
+#     )
+# 
+# }) %>% 
+#   group_by(date, Location) %>% 
+#   summarize(
+#     PM25 = mean(PM25, na.rm = T)
+#   )
+
+# saveRDS(fc_sensor_data_wk1, "fc_sensor_data_wk1.rds")
+# fc_sensor_data_wk4 <- readRDS("fc_sensor_data_wk4.rds")
+# fc_sensor_data_wk3 <- readRDS("fc_sensor_data_wk3.rds")
+# fc_sensor_data_wk2 <- readRDS("fc_sensor_data_wk2.rds")
+# fc_sensor_data_wk1 <- readRDS("fc_sensor_data_wk1.rds")
+# 
+# epa_sensor_data_wk4 <- readRDS("epa_sensor_data_wk4.rds")
+# epa_sensor_data_wk3 <- readRDS("epa_sensor_data_wk3.rds")
+# epa_sensor_data_wk2 <- readRDS("epa_sensor_data_wk2.rds")
+# epa_sensor_data_wk1 <- readRDS("epa_sensor_data_wk1.rds")
+# 
+# epa_sensor_data <- epa_sensor_data_wk1 %>%
+#   rbind(epa_sensor_data_wk2) %>%
+#   rbind(epa_sensor_data_wk3) %>%
+#   rbind(epa_sensor_data_wk4) %>%
+#   filter(Location == "outside") %>%
+#   mutate(city = "East Palo Alto")
+# 
+# fc_sensor_data <- fc_sensor_data_wk1 %>%
+#   rbind(fc_sensor_data_wk2) %>%
+#   rbind(fc_sensor_data_wk3) %>%
+#   rbind(fc_sensor_data_wk4) %>%
+#   filter(Location == "outside") %>%
+#   mutate(city = "Foster City")
+# 
+# saveRDS(fc_sensor_data, "fc_sensor_data.rds")
+# epa_sensor_data <- readRDS("epa_sensor_data.rds")
+# fc_sensor_data <- readRDS("fc_sensor_data.rds")
+
+# all_sensor_data <- epa_sensor_data %>%
+#   rbind(fc_sensor_data)
+# 
+# saveRDS(all_sensor_data, "all_sensor_data.rds")
+# all_sensor_data <- readRDS("all_sensor_data.rds")
+```
+
+```{r}
+#map
+#voronoi
+
+# smc_pm25_voronoi <-
+#   smc_sensors_clean %>%
+#   filter(location_type == "outside") %>% 
+#   st_union() %>% 
+#   st_voronoi() %>% 
+#   st_cast() %>% 
+#   st_as_sf() %>% 
+#   st_intersection(.,st_union(smc_county)) %>% 
+#   st_join(smc_sensors_clean %>% filter(location_type == "outside"))
+# 
+# #ggplot(smc_pm25_voronoi) + geom_sf()  
+# 
+# smc_cbgs <- block_groups("CA","San Mateo", cb = T, progress_bar = F) %>% 
+#   st_transform(4326)
+# 
+# smc_pm25_voronoi_cbg <-
+#   smc_pm25_voronoi %>% 
+#   st_intersection(smc_cbgs) %>% 
+#   st_make_valid() %>% 
+#   mutate(
+#     area = st_area(.) %>% as.numeric()
+#   ) %>% 
+#   st_drop_geometry() %>% 
+#   group_by(GEOID) %>% 
+#   summarize(
+#     PM25 = weighted.mean(PM25, area, na.rm = T)
+#   ) %>% 
+#   left_join(smc_cbgs %>% dplyr::select(GEOID)) %>% 
+#   st_as_sf()
+# 
+# smc_sensors <-
+#   smc_sensors_clean %>% 
+#   filter(location_type == "outside") %>% 
+#   .[smc_cbgs, ]
+# 
+# saveRDS(smc_sensors, "smc_sensors.rds")
+# 
+# pm25_pal <- colorNumeric(
+#   palette = "RdYlGn",
+#   reverse = T,
+#   domain = c(
+#     smc_pm25_voronoi_cbg$PM25,
+#     smc_sensors$PM25
+#   )
+# )
+# 
+# leaflet() %>% 
+#   addProviderTiles(provider = providers$CartoDB.Positron) %>% 
+#   addPolygons(
+#     data = smc_pm25_voronoi_cbg,
+#     fillColor = ~pm25_pal(PM25),
+#     fillOpacity = 0.5,
+#     color = "white",
+#     weight = 0.5,
+#     label = ~PM25,
+#     highlightOptions = highlightOptions(
+#       weight = 2,
+#       opacity = 1
+#     )
+#   ) %>% 
+#   addCircleMarkers(
+#     data = smc_sensors,
+#     fillColor = ~pm25_pal(PM25),
+#     fillOpacity = 1,
+#     color = "black",
+#     weight = 0.5,
+#     radius = 5,
+#     label = ~PM25
+#   ) %>% 
+#   addLegend(
+#     pal = pm25_pal,
+#     values = c(
+#       smc_pm25_voronoi_cbg$PM25,
+#       smc_sensors$PM25
+#     )
+#   )
+```
+
+```{r}
+# smc_places <- places("CA", cb = T, progress_bar = F) %>%
+#   st_centroid() %>%
+#   .[counties("CA") %>% filter(NAME == "San Mateo"),] %>%
+#   st_drop_geometry() %>%
+#   left_join(places("CA", cb = T) %>% select(PLACEFP)) %>%
+#   st_as_sf()
+# saveRDS(smc_places, "smc_places.rds")
+```
+
+
+<h4> Part 2: Population Equity </h4>
+
+An equity analysis illustrates how race and income may affect the distribution of good/moderate air quality. For the race analysis, it did seem fairly representational of the racial breakdown of the region, and also quite even across "moderate" and "good" categories. This could potentially be attributed to the fact that the AQI of the region is already fairly high scoring. For "good" air quality, white alone populations have 540,454 sensors monitoring the air quality versus the 8,827 sensors that Black/African American alone have. This large difference may skew the data towards good air quality in the Black/African American alone towards seeming better due to the lower number of sensors monitoring the area. This difference is even more pronounced in the "moderate" category: white alone populations have 13,252 sensors monitoring versus the 530 sensors for Black/African American alone. This could mean that the air quality is far worse (or potentially far better) than we are observing in the data.
+
+For the income breakdown, for "good" air, there is a much larger proportion of sensors for populations making $150,000 (387,353) or more versus the populations making less than $10,000 (16,158).
+Since this chart is representing all of San Mateo County's data, we are probably seeing skewed data to some degree than if we had just focused on East Palo Alto, which is a lower-income, high-minority area compared to the rest of the County.
+
+Future analyses could focus on understanding the proportion of the population earning 150K or above. If the majority of the population is earning at this level, then it would be justified that this population would have the largest proportion of sensors. If it is not the case that the majority of San Mateo County's residents are White alone and/or making 150K, then it is a very clear equity issue that those two populations have the highest sensor count compared to the total population. Again, potentially considering East Palo Alto separately from San Mateo county could be more poignant in understanding true equity in this area. <br>
+
+We associated sensors with Census populations by first pulling all of the sensor data from Purple Air. We then associated that data with geometries from the "places" Census data (ACS 5-year 2019). This then narrowed the number of sensors to just those within the San Mateo County boundary. Next, we used that boundary to isolate the sensors of interest while retaining the population data (estimate). 
+
+We pulled census data focused on race and income from ACS. Our two options were: 1) extrapolate based on the assumption that the sample from existing sensors are representative of the whole population and 2) apply the current equity scenario to the sensors which includes assuming every sensors represents an x% white and y% African American and z% Asian family (the one we went with) <br>
+
+```{r}
+# aqi_pal <- colorFactor(
+#   palette = "RdYlGn",
+#   reverse = T,
+#   domain = bay_sensors_clean$AQI_Cat
+# )
+# 
+# bay_sensors_clean %>% 
+#   filter(location_type == "inside") %>% 
+#   leaflet() %>% 
+#   addProviderTiles(provider = providers$CartoDB.Positron) %>% 
+#   addCircleMarkers(
+#     color = ~aqi_pal(AQI_Cat),
+#     label = ~AQI_Cat,
+#     radius = 5,
+#     opacity = 0.75
+#   ) %>% 
+#   addLegend(
+#     pal = aqi_pal,
+#     values = ~AQI_Cat
+#   )
+```
+
+```{r}
+# aqi_pal2 <- colorQuantile(
+#   palette = "RdYlGn",
+#   reverse = T,
+#   domain = bay_sensors_clean$AQI,
+#   n = 5
+# )
+# 
+# bay_sensors_clean %>% 
+#   leaflet() %>% 
+#   addProviderTiles(provider = providers$CartoDB.Positron) %>% 
+#   addCircleMarkers(
+#     color = ~aqi_pal2(AQI),
+#     label = ~paste0(AQI,", ",AQI_Cat),
+#     radius = 5,
+#     opacity = 0.75
+#   ) %>% 
+#   addLegend(
+#     pal = aqi_pal2,
+#     values = ~AQI
+#   )
+```
+
+
+```{r}
+# Sys.setenv(CENSUS_KEY="c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
+# 
+# acs_vars_2019_5yr <- readRDS("acs_vars_2019_5yr.rds")
+# 
+# race_categories <- c(
+#   "White alone",  
+#   "Black or African American alone",
+#   "American Indian and Alaska Native alone",
+#   "Asian alone",
+#   "Native Hawaiian and Other Pacific Islander alone",
+#   "Some Other Race alone",
+#   "Two or more Races"
+# )
+# 
+# income_race_tract <- 
+#   1:7 %>% 
+#   map_dfr(function(x){
+#     getCensus(
+#       name = "acs/acs5",
+#       vintage = 2019,
+#       region = "tract:*",
+#         regionin = "state:06+county:081",
+#       vars = paste0("group(B19001",LETTERS[x],")"),
+#     ) %>% 
+#       select(ends_with("E"), tract) %>%
+#       select(-c(state,NAME)) %>%
+#       pivot_longer(
+#         ends_with("E"),
+#         names_to = "name",
+#         values_to = "estimate"
+#       ) %>% 
+#       left_join(
+#         acs_vars_2019_5yr %>% 
+#           select(name, label)
+#       ) %>% 
+#       separate(
+#         label,
+#         into = c(NA, NA, "income"),
+#         sep = "!!"
+#       ) %>% 
+#       select(-name) %>% 
+#       group_by(income) %>%
+#       filter(!is.na(income)) %>%
+#       mutate(
+#         race = race_categories[x] #distinguishes from multi-race respondents
+#       )
+# })
+# 
+# saveRDS(income_race_tract, "income_race_tract.rds")
+# 
+# income_race_tract_summary <- income_race_tract %>%
+#   #select(-race) %>%
+#   #group_by(tract, race) %>%
+#   mutate(
+#     income = case_when(
+#       income == "Less than $10,000" ~ "Less than $10,000",
+#       income %in% c("$10,000 to $14,999", "$15,000 to $19,999", "$20,000 to $24,999") ~ "$10,000 to 24,999",
+#       income %in% c("$25,000 to $29,999", "$30,000 to $34,999", "$35,000 to $39,999", "$40,000 to $44,999", "$45,000 to $49,999") ~ "$25,000 to 49,999",
+#       income %in% c("$50,000 to $59,999", "$60,000 to $74,999") ~ "$50,000 to 74,999",
+#       income == "$75,000 to $99,999" ~ "$75,000 to 99,999",
+#       income %in% c("$100,000 to $124,999", "$125,000 to $149,999") ~ "$100,000 to 149,999",
+#       income %in% c("$150,000 to $199,999", "$200,000 or more") ~ "$150,000 or more",
+#       #TRUE ~ income
+#     )) %>%
+#   group_by(tract, income, race) %>%
+#   summarise(estimate = sum(estimate)) %>%
+#   ungroup()
+# 
+# income_race_tract_clean <- income_race_tract_summary %>%
+#   pivot_longer(
+#     cols = c(race, income),
+#     names_to = "categories",
+#     values_to = "option"
+#   ) #%>%
+#   # filter(tract %in% c("611800", "611900", "612000", "612100", "604300", "608000", "608100", "608200", "608300", "610300"))
+# 
+# saveRDS(income_race_tract_clean, "income_race_tract_clean.rds")
+```
+
+```{r}
+# smc_sensors_levels <- smc_sensors_clean %>%
+#   filter(location_type == "inside") %>%
+#   select(sensor_index, pm2.5_1week, geometry, humidity) %>%
+#   mutate(
+#       PM25 = 0.524*as.numeric(pm2.5_1week) - 0.0852*as.numeric(humidity) + 5.72,
+#       AQI = case_when(
+#         PM25 <= 12 ~ 
+#           paste(round(50/12*PM25), "Good"),
+#         PM25 <= 35.4 ~ 
+#           paste(round((100-51)/(35.4-12)*(PM25 - 12) + 51), "Moderate"),
+#         PM25 <= 55.4 ~
+#           paste(round((150-101)/(55.4-35.4)*(PM25 - 35.4) + 101), "Moderately Unhealthy"),
+#         PM25 <= 150.4 ~
+#           paste(round((200-151)/(150.4-55.4)*(PM25 - 55.4) + 151), "Unhealthy"),
+#         PM25 <= 250.4 ~
+#           paste(round((300-201)/(250.4-150.4)*(PM25 - 150.4) + 201), "Very Unhealthy"),
+#         TRUE ~ 
+#           paste(round((500-301)/(500.4-250.5)*(PM25 - 250.5) + 301), "Hazardous")
+#       )
+#     ) %>% 
+#     separate(
+#       AQI,
+#       into = c("AQI","AQI_Cat"),
+#       sep = " ",
+#       extra = "merge"
+#     ) %>% 
+#     mutate(
+#       AQI = as.numeric(AQI),
+#       AQI_Cat = AQI_Cat %>% factor(levels = c("Good", "Moderate","Moderately Unhealthy","Unhealthy","Very Unhealthy","Hazardous"))
+#     )
+```
+
+```{r}
+# smc_tracts <- tracts("CA", progress_bar = F) %>%
+#   filter(COUNTYFP == "081") %>%
+#   select(TRACTCE, geometry) %>%
+#   st_transform(4326)
+# 
+# smc_sensors_equity <- smc_sensors_levels %>%
+#   select(sensor_index, AQI_Cat, geometry) %>%
+#   st_join(smc_tracts) %>%
+#   rename(tract = TRACTCE) %>%
+#   left_join(income_race_tract_clean) %>%
+#   st_drop_geometry()
+# 
+# saveRDS(smc_sensors_equity, "smc_sensors_equity.rds")
+```
+
+
