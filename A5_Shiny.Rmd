@@ -1,0 +1,247 @@
+---
+title: "A5_Shiny"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    vertical_layout: fill
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r global, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(readxl)
+library(tigris)
+library(sf)
+library(leaflet)
+library(tidycensus)
+library(censusapi)
+library(mapview)
+library(esri2sf)
+library(plotly)
+library(knitr)
+library(mapboxapi)
+library(stringr)
+library(remotes)
+library(jsonlite)
+library(shiny)
+
+
+#part 1
+all_sensor_data <- readRDS("all_sensor_data.rds")
+
+#map
+smc_pm25_voronoi_cbg <- readRDS("smc_pm25_voronoi_cbg.rds")
+smc_sensors <- readRDS("smc_sensors.rds")
+
+smc_places <- readRDS("smc_places.rds")
+
+
+#part 2
+smc_sensors_equity <- readRDS("smc_sensors_equity.rds") 
+```
+
+
+
+Inputs {.sidebar}
+-------------------------------------
+Welcome to our dashboard for air quality in San Mateo county!
+
+By toggling between Foster City and East Palo Alto, you can see the AQI for these jurisdictions on the map to the right, and on the top left see their PM 2.5 change over time.
+
+On the bottom left, you can toggle between race and income and see the according equity distributions for the whole county's air quality.
+
+When you toggle, please be patient - it might take a few seconds load.
+
+```{r}
+selectInput(
+  inputId = "city", 
+  label = "City:",
+  choices = c("East Palo Alto", "Foster City"), 
+  selected = "East Palo Alto"
+)
+
+selectInput(
+  inputId = "category", 
+  label = "Population Groups:",
+  choices = c("race", "income"), 
+  selected = "race"
+)
+
+
+```
+
+by Lena Bakalian, Daphne Jacobsberg, & Catherine Beck
+
+Column
+-------------------------------------
+### Graphs
+
+```{r}
+plotlyOutput("feb_graph")
+```
+
+```{r, context = "server"}
+observeEvent({
+  input$city
+  }, {
+
+feb_graph <- all_sensor_data %>%
+  filter(city == input$city) %>%
+  ggplot() +
+  geom_line(
+    aes(
+      x = date,
+      y = PM25
+    )
+  ) +
+  labs(
+    x = "Date",
+    y = "PM 2.5 (ppm)",
+    title = paste0(input$city, " Indoor PM 2.5 Levels" )
+  )
+
+
+  output$feb_graph <- renderPlotly({
+    feb_graph %>%
+      ggplotly() %>%
+      config(displayModeBar = F)
+  })
+
+})
+```
+
+###
+```{r}
+plotlyOutput("equity_graph")
+```
+
+
+```{r, context = "server"}
+observeEvent({
+  input$category
+  }, {
+equity_graph <- smc_sensors_equity %>%
+  filter(categories == input$category) %>%
+  group_by(option, AQI_Cat) %>%
+  summarise(estimate = sum(estimate)) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_bar(
+    aes(
+      x = estimate,
+      y = AQI_Cat,
+      fill = option %>% factor(rev(c("Less than $10,000","$10,000 to 24,999","$25,000 to 49,999","$50,000 to 74,999","$75,000 to 99,999","$100,000 to 149,999","$150,000 or more", "White alone", "Black or African American alone", "American Indian and Alaska Native alone", "Asian alone", "Native Hawaiian and Other Pacific Islander alone", "Some Other Race alone", "Two or more Races")))), 
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "Proportion of Sensors",
+    y = "AQI Levels",
+    title = "San Mateo Equity Analysis",
+    fill = "Population Groups"
+  ) +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  )  +
+    guides(
+      fill = guide_legend(
+        reverse = T,
+        nrow = 3, 
+        byrow=TRUE
+    )
+  )
+  
+          
+  output$equity_graph <- renderPlotly({
+    equity_graph %>%
+      ggplotly() %>%
+      config(displayModeBar = F) %>% 
+      layout(legend = list(orientation = 'h', y = -1))
+  })
+
+})
+```
+
+
+
+Column
+-------------------------------------
+### Map
+
+
+```{r}
+leafletOutput("aqi_map")
+```
+
+```{r, context = "server"}
+observeEvent({
+  input$city
+  }, {
+
+pm25_pal <- colorNumeric(
+  palette = "RdYlGn",
+  reverse = T,
+  domain = c(
+    smc_pm25_voronoi_cbg$PM25,
+    smc_sensors$PM25
+  )
+)
+  
+  output$aqi_map <- renderLeaflet({
+    leaflet() %>% 
+  addProviderTiles(provider = providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = smc_pm25_voronoi_cbg,
+    fillColor = ~pm25_pal(PM25),
+    fillOpacity = 0.5,
+    color = "white",
+    weight = 0.5,
+    label = ~PM25,
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    )
+  ) %>% 
+  addCircleMarkers(
+    data = smc_sensors,
+    fillColor = ~pm25_pal(PM25),
+    fillOpacity = 1,
+    color = "black",
+    weight = 0.5,
+    radius = 5,
+    label = ~PM25
+  ) %>% 
+  addLegend(
+    pal = pm25_pal,
+    values = c(
+      smc_pm25_voronoi_cbg$PM25,
+      smc_sensors$PM25
+    )
+  )
+  })
+
+})
+```
+
+```{r, context = "server"}
+observeEvent(input$city, {
+  
+  selected <- smc_places %>% 
+    filter(NAME == input$city)
+  
+  leafletProxy("aqi_map") %>% 
+    removeShape("selected") %>% 
+    addPolygons(
+      data = selected,
+      fill = F,
+      color = "black",
+      weight = 2,
+      opacity = 1,
+      layerId = "selected"
+    )
+  
+})
+```
