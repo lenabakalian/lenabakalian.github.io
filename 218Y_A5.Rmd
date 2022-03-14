@@ -1,5 +1,5 @@
 ---
-title: "218Y_A5"
+title: "218Y_A5: Air Quality Equity in San Mateo County"
 author: "Lena Bakalian"
 date: "3/14/2022"
 output: html_document
